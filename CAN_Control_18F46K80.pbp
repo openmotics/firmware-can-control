@@ -31,7 +31,7 @@ hardware                con     1
 
 version                 con     4
 firmware                con     1
-built                   con     27
+built                   con     29
 
 MAX_NUMBER_CAN_MODULES  con     39
 MAX_NUMBER_CAN_INPUTS   CON     232
@@ -727,40 +727,34 @@ gosub delete_dali_stack
 '----------------------------------------------------------------------------
 
 mainloop:
-  gosub Interprete_Serial
-  CLEARWDT
-  gosub check_SerialErrors
-  gosub Check_LedsFP                'Check Leds Front Panel
-  gosub Interprete_Serial
-  CLEARWDT  
-  gosub Tx_CAN                      'Check if still messages to be sent on the CAN bus
-  gosub Interprete_Serial
-  CLEARWDT  
-  gosub Request_sensor_info
-  gosub Interprete_Serial
-  CLEARWDT  
-  Gosub Rx_CAN                      'Check if still messages are in the receiving CAN queue
-  gosub Interprete_Serial
-  CLEARWDT  
-  gosub check_can_sending_queue     'Check CAN sending queue
-  if mode="I" then                  'bus is in Initialization mode
-    gosub check_inputs              'during initialization, 2 inputs needs to be checked
-    
-    'delete
-  'else
-  '  gosub check_inputs2             'to be deleted, only for debug purposes
-         
-  endif
-  gosub Check_i2c_error
-  gosub Check_I2CQueue
-  CLEARWDT
-  gosub Update_all_leds
-  gosub check_CAN_communication     'Check health of CAN bus and choose protocol 1.2 or 2.0
-  gosub Check_dali_buffer           'Check Dali Buffer if messages needs te be interpreted
-  CLEARWDT
-  gosub check_can_error
-  'gosub Reset_Power
-  gosub Task_dali_tx 
+    gosub Interprete_Serial
+    CLEARWDT
+    gosub check_SerialErrors
+    gosub Check_LedsFP                'Check Leds Front Panel
+    gosub Interprete_Serial
+    CLEARWDT  
+    gosub Tx_CAN                      'Check if still messages to be sent on the CAN bus
+    gosub Interprete_Serial
+    CLEARWDT  
+    gosub Request_sensor_info
+    gosub Interprete_Serial
+    CLEARWDT  
+    Gosub Rx_CAN                      'Check if still messages are in the receiving CAN queue
+    gosub Interprete_Serial
+    CLEARWDT  
+    gosub check_can_sending_queue     'Check CAN sending queue
+    if mode="I" then                  'bus is in Initialization mode
+        gosub check_inputs            'during initialization, 2 inputs needs to be checked      
+    endif
+    gosub Check_i2c_error
+    gosub Check_I2CQueue
+    CLEARWDT
+    gosub Update_all_leds
+    gosub check_CAN_communication     'Check health of CAN bus and choose protocol 1.2 or 2.0
+    gosub Check_dali_buffer           'Check Dali Buffer if messages needs te be interpreted
+    CLEARWDT
+    gosub check_can_error
+    gosub Task_dali_tx 
 Goto mainloop
 
 '--------------------------------------------------------------------------
@@ -774,7 +768,7 @@ Receive1:                  'RS485 receive routine
   if recser1=1 then        'Receiving?
     StackSer1[PointerSer1]=recsertemp2
     ReceiveTemp=pointerser1-1
-    if stackser1[ReceiveTemp]=13 and stackser1[pointerser1]=10 then
+    if recsertemp1=13 and recsertemp2=10 then
       RCSTA1.4=0           'disable receiving serial 1
       RecSer1=0            'stop receiving ser1 and buffering
       InterpreteSer1=1
@@ -971,26 +965,27 @@ SSP:
 ' Subroutines
 '---------------------------------------------------------------------------
 
-Set_ttl_port_on:    'switch ON TTL output (RS232 OFF) on external test print
-  pause 1
-  i2cDataPCF.bit2=0
-  DataWrite[0]=i2cDataPCF
-  i2ccont=PCF8574i2ccont
-  NrBytesWrite=1
-  gosub Write_i2c
-  pause 1
-return
+'Set_ttl_port_on:    'switch ON TTL output (RS232 OFF) on external test print
+'  pause 1
+'  i2cDataPCF.bit2=0
+'  DataWrite[0]=i2cDataPCF
+'  i2ccont=PCF8574i2ccont
+'  NrBytesWrite=1
+'  gosub Write_i2c
+'  pause 1
+'return
 
-Set_ttl_port_off:   'switch OFF TTL output (RS232 ON) on external test print
-  pause 1
-  i2cDataPCF.bit2=1
-  DataWrite[0]=i2cDataPCF
-  i2ccont=PCF8574i2ccont
-  NrBytesWrite=1
-  gosub Write_i2c
-  pause 1
-return
+'Set_ttl_port_off:   'switch OFF TTL output (RS232 ON) on external test print
+'  pause 1
+'  i2cDataPCF.bit2=1
+'  DataWrite[0]=i2cDataPCF
+'  i2ccont=PCF8574i2ccont
+'  NrBytesWrite=1
+'  gosub Write_i2c
+'  pause 1
+'return
 
+'hier dali
 Add_Dali_Tx_queue:
     if dali_tx_end_pointer>=MAX_DALI_QUEUE then dali_tx_end_pointer=0    'Make sure tx_end_pointer is in a valid range before starting
     if dali_tx_queue_size<MAX_DALI_QUEUE then
@@ -1016,50 +1011,51 @@ Rem_Dali_Tx_queue:
 return
 
 Dali_Tx:
-  'RndValue=0
-  'while (RecSer2OK=0 and RndValue<28)  'Wait until Lunatone SCI has answered
-  'wend
-  s1=131    'Dali Lunatone control Byte
-  s2=0      'Dali instruction (optional, not in use for the moment)
-  s3=s7<<1  'Dali Instruction&address
-  if s6=0 then
-    s3=s3&%11111110
-  else
-    s3=s3|%00000001 
-  endif
-  gosub Add_Dali_Tx_queue
-  's5=s1^s2^s3^s4          
-  'gosub Led_Txd_rs232
-  'hserout2 [s1,s2,s3,s4,s5]   
-  'RecSer2Ok=NOK
+    'RndValue=0
+    'while (RecSer2OK=0 and RndValue<28)  'Wait until Lunatone SCI has answered
+    'wend
+    s1=131    'Dali Lunatone control Byte
+    s2=0      'Dali instruction (optional, not in use for the moment)
+    s3=s7<<1  'Dali Instruction&address
+    if s6=0 then
+        s3=s3&%11111110
+    else
+        s3=s3|%00000001 
+    endif
+    gosub Add_Dali_Tx_queue
+    's5=s1^s2^s3^s4          
+    'gosub Led_Txd_rs232
+    'hserout2 [s1,s2,s3,s4,s5]   
+    'RecSer2Ok=NOK
 return
 
 Task_dali_tx:
-  if dali_tx_state_machine==START then      'START: state machine
-    if dali_tx_queue_size>0 then            'Something in the DALI send queue
-      if RecSer2OK==OK or dali_tx_wait_time==0 then  'New message can be put on the DALI bus
-        dali_tx_state_machine=dali_tx_state_machine+1       
-      endif
+    if dali_tx_state_machine==START then      'START: state machine
+        if dali_tx_queue_size>0 then            'Something in the DALI send queue
+            if RecSer2OK==OK or dali_tx_wait_time==0 then  'New message can be put on the DALI bus
+                dali_tx_state_machine=dali_tx_state_machine+1       
+            endif
+        endif
+    elseif dali_tx_state_machine==STEP1 then  'STEP1: Send DALI message
+        gosub Led_Txd_rs232
+        s1=A_Queue_dali_D0[dali_tx_start_pointer]
+        s2=A_Queue_dali_D1[dali_tx_start_pointer]
+        s3=A_Queue_dali_D2[dali_tx_start_pointer]
+        s4=A_Queue_dali_D3[dali_tx_start_pointer]
+        s5=s1^s2^s3^s4
+        hserout2 [s1,s2,s3,s4,s5]
+        'hserout2 [dec dali_tx_start_pointer," Dali: ",dec s1," ",dec s2," ",dec s3," ",dec s4," ",dec s5,13,10]
+        RecSer2Ok=NOK
+        dali_tx_wait_time=50
+        dali_tx_state_machine=dali_tx_state_machine+1 
+    elseif dali_tx_state_machine==STEP2 then  'STEP2: Remove Message from send queue
+        gosub Rem_Dali_Tx_queue
+        dali_tx_state_machine=dali_tx_state_machine+1
+    elseif dali_tx_state_machine==STEP3 then  'STEP3: End state machine
+        dali_tx_state_machine=START
+    else
+        dali_tx_state_machine=START             'DEFAULT
     endif
-  elseif dali_tx_state_machine==STEP1 then  'STEP1: Send DALI message
-    gosub Led_Txd_rs232
-    s1=A_Queue_dali_D0[dali_tx_start_pointer]
-    s2=A_Queue_dali_D1[dali_tx_start_pointer]
-    s3=A_Queue_dali_D2[dali_tx_start_pointer]
-    s4=A_Queue_dali_D3[dali_tx_start_pointer]
-    s5=s1^s2^s3^s4
-    hserout2 [s1,s2,s3,s4,s5]
-    RecSer2Ok=NOK
-    dali_tx_wait_time=50
-    dali_tx_state_machine=dali_tx_state_machine+1 
-  elseif dali_tx_state_machine==STEP2 then  'STEP2: Remove Message from send queue
-    gosub Rem_Dali_Tx_queue
-    dali_tx_state_machine=dali_tx_state_machine+1
-  elseif dali_tx_state_machine==STEP3 then  'STEP3: End state machine
-    dali_tx_state_machine=START
-  else
-    dali_tx_state_machine=START             'DEFAULT
-  endif
 return
 
 Check_dali_buffer:
@@ -1140,9 +1136,9 @@ return
 
 Interprete_dali_message:
     'delete
-    gosub Set_ttl_port_on
+    'gosub Set_ttl_port_on
     'hserout2 ["+++ Dali message received (",dec PointerCheckSer2," ",dec StackSer2Lvl,") ",dec Dali_var[0]," ",dec Dali_var[1]," ",dec Dali_var[2]," ",dec Dali_var[3]," NrOfInputs=",dec NrOfInputs," NrOfInputsNew=",dec NrOfInputsNew," NrOfInputModules=",dec NrOfInputModules,13,10]
-    gosub Set_ttl_port_off
+    'gosub Set_ttl_port_off
     'pause 2
     gosub Led_Rxd_rs232
     if Dali_var[0]=97 then        'Confirmation SCI received
@@ -1314,7 +1310,7 @@ Update_all_leds:
       UpdateLedState=0
       UpdateLeds=0
       gosub Sent_NrOfInputs
-      gosub Sent_NrOfSensors
+      if NrOfInputs==0 or NrOfSensors>0 then gosub Sent_NrOfSensors
       gosub Calculate_NrofOutputs
       gosub read_eeprom_ledMinMax
       Gosub Sent_LedMinMax
@@ -1358,7 +1354,7 @@ Reset_power:
       elseif ResetPower=4 then
         ResetPower=0
         gosub Sent_NrOfInputs
-        gosub Sent_NrOfSensors
+        if NrOfInputs==0 or NrOfSensors>0 then gosub Sent_NrOfSensors
       endif
     endif          
   endif
@@ -1661,7 +1657,7 @@ Check_message:     't is already used
             gosub Check_can_message_detail
         else
             'delete
-            hserout2 ["CRC error ",dec t," (",dec QueueRxdNrBytes[t],") ",dec QueueRxdByte0[t]," ",dec QueueRxdByte1[t]," ",dec QueueRxdByte2[t]," ",dec QueueRxdByte3[t]," ",dec QueueRxdByte4[t]," ",dec QueueRxdByte5[t]," ",dec QueueRxdByte6[t]," ",dec QueueRxdByte7[t],13,10]    
+            'hserout2 ["CRC error ",dec t," (",dec QueueRxdNrBytes[t],") ",dec QueueRxdByte0[t]," ",dec QueueRxdByte1[t]," ",dec QueueRxdByte2[t]," ",dec QueueRxdByte3[t]," ",dec QueueRxdByte4[t]," ",dec QueueRxdByte5[t]," ",dec QueueRxdByte6[t]," ",dec QueueRxdByte7[t],13,10]    
         endif       
     else                                  'Message to be forwarded to the master (SID<>6)
         gosub forward_can_message_to_master
@@ -1682,10 +1678,11 @@ forward_can_message_to_master:
 return
 
 Check_can_message_detail:
+    'hserout2 ["Rec message ",dec QueueRxdNrBytes[t]," Data:",dec QueueRxdByte0[t]," ",dec QueueRxdByte1[t]," ",dec QueueRxdByte2[t]," ",dec QueueRxdByte3[t]," ",dec QueueRxdByte4[t]," ",dec QueueRxdByte5[t]," ",dec QueueRxdByte6[t]," (",dec NrOfInputs,"/",dec NrOfSensors,")",13,10]     
     if QueueRxdByte1[t]=1 then  'Input information
         CanStatusOk=1             'CAN is OK so don't change communication protocol between 1.2 and 2.0
         CanError=0
-        'hserout2 ["Rec message ",dec QueueRxdNrBytes[t]," NrOfInputs ",dec NrOfInputs," Data:",dec QueueRxdByte0[t]," ",dec QueueRxdByte1[t]," ",dec QueueRxdByte2[t]," ",dec QueueRxdByte3[t]," ",dec QueueRxdByte4[t]," ",dec QueueRxdByte5[t]," ",dec QueueRxdByte6[t]," (",dec NrOfInputs,"/",dec NrOfSensors,")",13,10]     
+        'delete
         if QueueRxdByte2[t]==255 then   'Nr of inputs not known
             QueueTxdByte0[QueueTxdPointer]=0
             QueueTxdByte1[QueueTxdPointer]=253
@@ -1744,7 +1741,7 @@ Check_can_message_detail:
             endif
             'delete
             'if QueueRxdByte2[t]==21 then hserout2 ["Sensor 21 values received: ",dec QueueRxdByte3[t]," ",dec QueueRxdByte4[t]," ",dec QueueRxdByte5[t]," ",dec QueueRxdByte6[t]," Temp=",dec Temperature[x]," x=",dec x,13,10,13,10]
-            hserout2 ["Sensor ",dec x," values received: ",dec QueueRxdByte3[t]," ",dec QueueRxdByte4[t]," ",dec QueueRxdByte5[t]," ",dec QueueRxdByte6[t]," Temp=",dec Temperature[x]," x=",dec x,13,10]
+            'hserout2 ["Sensor ",dec x," values received: ",dec QueueRxdByte3[t]," ",dec QueueRxdByte4[t]," ",dec QueueRxdByte5[t]," ",dec QueueRxdByte6[t]," Temp=",dec Temperature[x]," x=",dec x,13,10]
         endif
         gosub Check_queue_message
     elseif QueueRxdByte0[t]=3 and QueueRxdByte1[t]=2 then  'Sensor Air Quality information
@@ -1763,7 +1760,7 @@ Check_can_message_detail:
         UpdateLedState=0  'Update all leds of all modules
         UpdateLeds=1
         gosub Sent_NrOfInputs
-        gosub Sent_NrOfSensors
+        if NrOfInputs==0 or NrOfSensors>0 then gosub Sent_NrOfSensors
         gosub read_eeprom_ledMinMax
         Gosub Sent_LedMinMax
         'delete
@@ -2322,6 +2319,7 @@ Interprete_Serial: 'Interprete data coming from the RS485 bus
 return
 
 Broadcast_message:      'RS485 broadcasts
+    'hserout2 ["Broadcast message A:",dec stackser1[0]," ",dec stackser1[1]," ",dec stackser1[2]," ",dec stackser1[3]," ",dec stackser1[4]," ",dec stackser1[5]," ",dec stackser1[6]," (",dec Mod_ID1C," ",dec Mod_ID2C," ",dec Mod_ID3C,")",13,10]
     if stackser1[0]=0 then       'General broadcast message for all modules
         if stackser1[4]="L" and stackser1[5]="L" then   'Bus in Live mode
             if mode="I" then high LED_ST  
@@ -2349,59 +2347,62 @@ Broadcast_message:      'RS485 broadcasts
             'hserout2 ["Update Led message received ",13,10]
         endif                               
     else                        'Specific broadcast message
+        'hserout2 ["Broadcast message B:",dec stackser1[0]," ",dec stackser1[1]," ",dec stackser1[2]," ",dec stackser1[3]," ",dec stackser1[4]," ",dec stackser1[5]," ",dec stackser1[6]," (",dec Mod_ID1C," ",dec Mod_ID2C," ",dec Mod_ID3C,")",13,10]
         if stackser1[0]="C" then  'CAN modules only
-            if stackser1[4]="G" and stackser1[5]<16 then  'Activate Group with Dim value
-                s4=stackser1[6]       'DIM value
-                s6=0                  '=1 group ON/OFF (S4=0->OFF, S4=5->ON), =0 Group Dim value
-                s7=64+stackser1[5]    '64+Group number (0..15)
-                gosub Dali_Tx              
-            endif
-            if stackser1[4]="I" and stackser1[5]="D" then   'Discover CAN Control
-                if ModuleNr=stackser1[6] then                 'Only the right CAN control (1-4) can do the discover routine
-                    VirtualButton=1
-                    gosub check_inputs
-                endif  
-            endif
-            if stackser1[4]="A" and stackser1[5]="E" then   'Activate Eeprom
-                gosub activate_eeprom
-                gosub activate_eeprom2
-                gosub activate_eeprom3
-            endif                              
-            if stackser1[4]="l" and stackser1[5]="L" then   'Lowest possible value for the CAN Leds
-                if stackser1[6]>127 or stackser1[6]>LedBrightnessMax then  'Minimum Brightness
-                    LedBrightnessMin=0
-                else
-                    LedBrightnessMin=stackser1[6]
-                endif 
-                Gosub Sent_LedMinMax
-            endif
-            if stackser1[4]="l" and stackser1[5]="H" then   'Highest possible value for the CAN Leds
-                if stackser1[6]<LedBrightnessMin then
-                    LedBrightnessMax=255
-                else
-                    LedBrightnessMax=stackser1[6]
+            if stackser1[1]==0 and stackser1[2]==0 and stackser1[3]==0 then
+                if stackser1[4]="G" and stackser1[5]<16 then  'Activate Group with Dim value
+                    s4=stackser1[6]       'DIM value
+                    s6=0                  '=1 group ON/OFF (S4=0->OFF, S4=5->ON), =0 Group Dim value
+                    s7=64+stackser1[5]    '64+Group number (0..15)
+                    gosub Dali_Tx              
                 endif
-                Gosub Sent_LedMinMax          
-            endif
-            if stackser1[4]="l" and stackser1[5]="O" then   'All Led On/Off
-                if stackser1[6]=0 then     'All leds off
-                    gosub All_leds_off
-                endif        
-            endif            
-            if stackser1[4]="l" and stackser1[5]>=0 and stackser1[5]<6 then  'set led
-                rs=0
-                DataRead[0]=stackser1[6]
-                if stackser1[5]=0 then       'Led OFF
-                    DataRead[1]=128            'Switch OFF
-                    gosub set_led_off                
-                elseif stackser1[5]=1 then  'Led ON
-                    DataRead[1]=15
-                    gosub set_led_on                            
-                else                        'Led blinking
-                    DataRead[1]=(stackser1[5]*16)-1  'Led function
-                    gosub set_led_on                                    
-                endif   
-            endif
+                if stackser1[4]="I" and stackser1[5]="D" then   'Discover CAN Control
+                    if ModuleNr=stackser1[6] then                 'Only the right CAN control (1-4) can do the discover routine
+                        VirtualButton=1
+                        gosub check_inputs
+                    endif  
+                endif
+                if stackser1[4]="A" and stackser1[5]="E" then   'Activate Eeprom
+                    gosub activate_eeprom
+                    gosub activate_eeprom2
+                    gosub activate_eeprom3
+                endif                              
+                if stackser1[4]="l" and stackser1[5]="L" then   'Lowest possible value for the CAN Leds
+                    if stackser1[6]>127 or stackser1[6]>LedBrightnessMax then  'Minimum Brightness
+                        LedBrightnessMin=0
+                    else
+                        LedBrightnessMin=stackser1[6]
+                    endif 
+                    Gosub Sent_LedMinMax
+                endif
+                if stackser1[4]="l" and stackser1[5]="H" then   'Highest possible value for the CAN Leds
+                    if stackser1[6]<LedBrightnessMin then
+                        LedBrightnessMax=255
+                    else
+                        LedBrightnessMax=stackser1[6]
+                    endif
+                    Gosub Sent_LedMinMax          
+                endif
+                if stackser1[4]="l" and stackser1[5]="O" then   'All Led On/Off
+                    if stackser1[6]=0 then     'All leds off
+                        gosub All_leds_off
+                    endif        
+                endif            
+                if stackser1[4]="l" and stackser1[5]>=0 and stackser1[5]<6 then  'set led
+                    rs=0
+                    DataRead[0]=stackser1[6]
+                    if stackser1[5]=0 then       'Led OFF
+                        DataRead[1]=128            'Switch OFF
+                        gosub set_led_off                
+                    elseif stackser1[5]=1 then  'Led ON
+                        DataRead[1]=15
+                        gosub set_led_on                            
+                    else                        'Led blinking
+                        DataRead[1]=(stackser1[5]*16)-1  'Led function
+                        gosub set_led_on                                    
+                    endif   
+                endif
+            endif       
         endif                            
     endif         
 return
@@ -2726,92 +2727,109 @@ return
 
 Check_CAN_Module:       'RS485 messages coming in
     if stackser1[4]="I" then  'Eeprom data received
-      gosub Check_Eeprom_Data
-      gosub sent_can
-    'bootloader
-    elseif stackser1[4]="F" and stackser1[5]="V" then       'Request Firmware Version
-      s1="V"
-      error_code=255
-      gosub send_F_response
-    elseif stackser1[4]="F" and stackser1[5]="M" then       'Sent message to uCAN, "FM" 
-      CRC2=stackser1[0]+stackser1[1]+stackser1[2]+stackser1[3]+stackser1[4]+stackser1[5]+stackser1[6]+stackser1[7]+stackser1[8]+stackser1[9]+stackser1[10]+stackser1[11]+stackser1[12]+stackser1[13]+stackser1[14]+stackser1[15]
-      'delete
-      'hserout2["FM instruction received CRC=",dec CRC2," (",dec stackser1[16]," ",dec stackser1[17]," ",dec stackser1[18],") NoB=",dec stackser1[6]," SID=",dec stackser1[7]," Data=",dec stackser1[8]," ",dec stackser1[9]," ",dec stackser1[10]," ",dec stackser1[11]," ",dec stackser1[12]," ",dec stackser1[13]," ",dec stackser1[14]," ",dec stackser1[15],13,10]
-      if CRC2=((256*stackser1[17])+stackser1[18]) and stackser1[16]="C" and stackser1[6]<9 then    'CRC is correct, "C" found before CRC and Nr of bytes to transmit<9
-        BootLoadMode=1
-        'delete
-        'hserout2["FM instruction received ",dec stackser1[6]," ",dec stackser1[7]," ",dec stackser1[8]," ",dec stackser1[9]," ",dec stackser1[10]," ",dec stackser1[11]," ",dec stackser1[12]," ",dec stackser1[13]," ",dec stackser1[14],13,10]
-        QueueTxdByte0[QueueTxdPointer]=stackser1[8]
-        QueueTxdByte1[QueueTxdPointer]=stackser1[9]
-        QueueTxdByte2[QueueTxdPointer]=stackser1[10]
-        QueueTxdByte3[QueueTxdPointer]=stackser1[11]
-        QueueTxdByte4[QueueTxdPointer]=stackser1[12]
-        QueueTxdByte5[QueueTxdPointer]=stackser1[13]
-        QueueTxdByte6[QueueTxdPointer]=stackser1[14]
-        QueueTxdByte7[QueueTxdPointer]=stackser1[15]
-        QueueTxdSID[QueueTxdPointer]=(stackser1[7]<<5)&%11100000     
-        QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
-        QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
-        QueueTxdNrBytes[QueueTxdPointer]=stackser1[6]
-        StdSidUsed=0 
-        gosub Add_Txd_queue
-        StdSidUsed=1      
-      'else
-        'delete
-        'hserout2["FM instruction received but wrong CRC(",dec CRC2," ",dec stackser1[15]," ",dec stackser1[16]," ",dec stackser1[17],") ",dec stackser1[7]," ",dec stackser1[8]," ",dec stackser1[9]," ",dec stackser1[10]," ",dec stackser1[11]," ",dec stackser1[12]," ",dec stackser1[13]," ",dec stackser1[14]," ",dec stackser1[15],13,10]
-        'reply with error message to Master
-      endif
-    elseif stackser1[4]="F" and stackser1[5]="X" then       'Request Eeprom Erase and factory reset
-      'delete
-      'hserout2["FX Instruction received",13,10]
-      CRC2=stackser1[0]+stackser1[1]+stackser1[2]+stackser1[3]+stackser1[4]+stackser1[5]+stackser1[6]
-      if CRC2=((256*stackser1[8])+stackser1[9]) and stackser1[7]="C" then
-        if stackser1[6]=0 then
-          s1="X"                                'Full erase 
-          gosub send_F_response
-          'delete
-          'hserout2["FX Full erase",13,10]          
-          gosub erase_eeprom
+        gosub Check_Eeprom_Data
+        gosub sent_can
+        'bootloader
+    elseif stackser1[4]="F" then        'Firmware/Bootloader messages
+        gosub check_firmware_message
+    elseif stackser1[4]="E" then        'Erase cc inputs or sensors
+        gosub check_erase_message
+    endif     
+return
+
+Check_erase_message:                                            'CLI instruction "erase cc inputs" or "erase cc sensors"
+    'hier debug can    
+    if mode=="I" then
+        if stackser1[5]=="I" and stackser1[6]==171 then         'Erase inputs
+            NrOfInputs=0
+            NrOfInputsNew=0 
+            write 304,NrOfInputs
+            gosub Sent_NrOfInputs
+            s1="X"                                'Erase done
+            gosub send_F_response            
+            'delete
+            'hserout2 ["Erase CAN Control Inputs",13,10]
+        elseif stackser1[5]=="S" and stackser1[6]==171 then     'Erase sensors
+            NrOfSensors=0
+            NrOfSensorsNew=0
+            write 305,NrOfSensors
+            gosub Sent_NrOfSensors
+            s1="X"                                'Erase done
+            gosub send_F_response            
+            'delete
+            'hserout2 ["Erase CAN Control Sensors",13,10]
         endif
-        if stackser1[6]=1 then                                'Only erase of the NrOfInputs (and thus erase of inputs of the connected uCAN's
-          s1="X"
-          gosub send_F_response
-          'delete
-          'hserout2["FX Inputs erase",13,10]        
-          NrOfInputs=0
-          NrOfInputsNew=0   
-          write 304,NrOfInputs
-          gosub Sent_NrOfInputs        
-        endif
-        if stackser1[6]=2 then                                'Only erase of the NrOfSensors (and thus erase of sensors of the connected uCAN's
-          s1="X"
-          gosub send_F_response
-          'delete
-          'hserout2["FX Sensors erase",13,10]        
-          NrOfSensors=0
-          NrOfSensorsNew=0   
-          write 305,NrOfSensors
-          gosub Sent_NrOfSensors        
-        endif
-      else              'CRC error
-        error_code=4
-        s1="X"
+    endif
+return
+
+Check_firmware_message:
+    if stackser1[5]="V" then       'Request Firmware Version
+        s1="V"
+        error_code=255
         gosub send_F_response
-        'delete
-        'hserout2["FX CRC error",13,10]
-      endif                      
-    elseif stackser1[4]="F" and stackser1[5]="R" then       'Perform Reset of the module
-      write 330,stackser1[6]                                'Write number of seconds that this module must remain in bootloader mode
-      s1="R"
-      gosub send_F_response
-      pause 5
-      asm
-        reset
-      endasm
-    elseif stackser1[4]="F" and stackser1[5]="S" then       'Respond on Request of Master (NrOfCanModules, CAN id's)
-      s1="S"
-      gosub send_F_response     
-    endif         
+    elseif stackser1[5]="M" then       'Sent message to uCAN, "FM" 
+        CRC2=stackser1[0]+stackser1[1]+stackser1[2]+stackser1[3]+stackser1[4]+stackser1[5]+stackser1[6]+stackser1[7]+stackser1[8]+stackser1[9]+stackser1[10]+stackser1[11]+stackser1[12]+stackser1[13]+stackser1[14]+stackser1[15]
+        if CRC2=((256*stackser1[17])+stackser1[18]) and stackser1[16]="C" and stackser1[6]<9 then    'CRC is correct, "C" found before CRC and Nr of bytes to transmit<9
+            BootLoadMode=1
+            'delete
+            'hserout2["FM instruction received ",dec stackser1[6]," ",dec stackser1[7]," ",dec stackser1[8]," ",dec stackser1[9]," ",dec stackser1[10]," ",dec stackser1[11]," ",dec stackser1[12]," ",dec stackser1[13]," ",dec stackser1[14],13,10]
+            QueueTxdByte0[QueueTxdPointer]=stackser1[8]
+            QueueTxdByte1[QueueTxdPointer]=stackser1[9]
+            QueueTxdByte2[QueueTxdPointer]=stackser1[10]
+            QueueTxdByte3[QueueTxdPointer]=stackser1[11]
+            QueueTxdByte4[QueueTxdPointer]=stackser1[12]
+            QueueTxdByte5[QueueTxdPointer]=stackser1[13]
+            QueueTxdByte6[QueueTxdPointer]=stackser1[14]
+            QueueTxdByte7[QueueTxdPointer]=stackser1[15]
+            QueueTxdSID[QueueTxdPointer]=(stackser1[7]<<5)&%11100000     
+            QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
+            QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
+            QueueTxdNrBytes[QueueTxdPointer]=stackser1[6]
+            StdSidUsed=0 
+            gosub Add_Txd_queue
+            StdSidUsed=1      
+        endif
+    'elseif stackser1[5]="X" then       'Request Eeprom Erase and factory reset
+    '    CRC2=stackser1[0]+stackser1[1]+stackser1[2]+stackser1[3]+stackser1[4]+stackser1[5]+stackser1[6]
+    '    if CRC2=((256*stackser1[8])+stackser1[9]) and stackser1[7]="C" then
+    '        if stackser1[6]=0 then
+    '            s1="X"                                'Full erase 
+    '            gosub send_F_response         
+    '            gosub erase_eeprom
+    '        endif
+    '        if stackser1[6]=1 then                                'Only erase of the NrOfInputs (and thus erase of inputs of the connected uCAN's
+    '            s1="X"
+    '            gosub send_F_response      
+    '            NrOfInputs=0
+    '            NrOfInputsNew=0   
+    '            write 304,NrOfInputs
+    '            gosub Sent_NrOfInputs        
+    '        endif
+    '        if stackser1[6]=2 then                                'Only erase of the NrOfSensors (and thus erase of sensors of the connected uCAN's
+    '            s1="X"
+    '            gosub send_F_response       
+    '            NrOfSensors=0
+    '            NrOfSensorsNew=0   
+    '            write 305,NrOfSensors
+    '            gosub Sent_NrOfSensors        
+    '        endif
+    '    else              'CRC error
+    '        error_code=4
+    '        s1="X"
+    '        gosub send_F_response
+    '    endif                      
+    elseif stackser1[5]="R" then       'Perform Reset of the module
+        write 330,stackser1[6]                                'Write number of seconds that this module must remain in bootloader mode
+        s1="R"
+        gosub send_F_response
+        pause 5
+        asm
+            reset
+        endasm
+    elseif stackser1[5]="S" then       'Respond on Request of Master (NrOfCanModules, CAN id's)
+        s1="S"
+        gosub send_F_response     
+    endif    
 return
 
 send_F_response:
@@ -2935,20 +2953,19 @@ sent_input:
   gosub Clean_queue
 return
 
-sent_can:
-  'gosub Check_queue     
-  s1=InputState[InputCount]
-  s2="P"     'Pulse counter information    
-  t_word=0
-  s3=pc
-  s4=t_word.byte1
-  s5=t_word.byte0
-  s6="C"         'CRC check
-  t_word=s1+s2+s3+s4+s5+s6
-  s7=t_word.byte1
-  s8=t_word.byte0    
-  gosub rs485_send6
-  gosub Clean_queue
+'hier debug can
+sent_can:    
+    s1=0
+    s2="d"          'detailed information   
+    s3=NrOfInputs
+    s4=NrOfSensors
+    s5=NrOfOutputsO+NrOfOutputsD+NrOfOutputsR
+    s6="C"          'CRC check
+    t_word=s1+s2+s3+s4+s5+s6
+    s7=t_word.byte1
+    s8=t_word.byte0    
+    gosub rs485_send6
+    gosub Clean_queue
 return
 
 
@@ -3643,7 +3660,7 @@ Erase_eeprom:
     next t
   next q
   high LED_ST
-  hserout2 [13,10,"ERASE DONE",13,10]
+  'hserout2 [13,10,"ERASE DONE",13,10]
   pause 50
   asm
     reset
