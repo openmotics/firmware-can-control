@@ -31,7 +31,7 @@ hardware                con     1
 
 version                 con     4
 firmware                con     1
-built                   con     29
+built                   con     31
 
 MAX_NUMBER_CAN_MODULES  con     39
 MAX_NUMBER_CAN_INPUTS   CON     232
@@ -48,7 +48,7 @@ PAC_ADDRESS             con     %10011000
 BUFFER_UART1            con     50
 BUFFER_UART2            con     30
 MAX_DALI_QUEUE          con     25
-I2CQUEUEMAX             con     70
+I2CQUEUEMAX             con     69
 QUEUE                   con     20      'Queue all the button presses and make sure the master gets them all
 MAX_INPUT_MODULES       con     20      'MAX 30 is allowed
 MAX_OUTPUT_MODULES      con     20      'MAX 30 is allowed                      
@@ -394,7 +394,8 @@ NrOfOutputsOn       var byte
 NrOfLightsOn        var byte
 OutputType          var bit[240]   '=0 -> Output, =1 -> Light
 InitOngoing         var bit
-CanCommunicationCounter var word
+CanCommunicationCounter     var word
+Rs485CommunicationCounter   var word
 CanStatusOk         var bit
 CanError            var byte
 'hier
@@ -541,6 +542,7 @@ NrOfOutputsOn=0
 NrOfLightsOn=0
 InitOngoing=0
 CanCommunicationCounter=0
+Rs485CommunicationCounter=0
 CanStatusOk=0
 CanError=0
 UpdateLeds=0
@@ -754,7 +756,8 @@ mainloop:
     gosub Check_dali_buffer           'Check Dali Buffer if messages needs te be interpreted
     CLEARWDT
     gosub check_can_error
-    gosub Task_dali_tx 
+    gosub Task_dali_tx
+    gosub Check_module_health 
 Goto mainloop
 
 '--------------------------------------------------------------------------
@@ -785,7 +788,7 @@ Receive1:                  'RS485 receive routine
       recser1=1            'start receiving ser1
     endif
   endif
-  RCSTA1.4=1  'enable UART1 receiver
+  'RCSTA1.4=1  'enable UART1 receiver
 @ INT_RETURN
 
 '--------UART2 Receive------------
@@ -822,6 +825,7 @@ Timer2:   'interrupt every 1,6ms
   RndValue=RndValue+1
   if dali_tx_wait_time>0 then dali_tx_wait_time=dali_tx_wait_time-1
   CanCommunicationCounter=CanCommunicationCounter+1
+  if Rs485CommunicationCounter<65535 then Rs485CommunicationCounter=Rs485CommunicationCounter+1
   if I2CTimeOut>0 then I2CTimeOut=I2CTimeOut-1
   if ResetTimer>0 then ResetTimer=ResetTimer-1
   T2CON.2=1
@@ -984,6 +988,17 @@ SSP:
 '  gosub Write_i2c
 '  pause 1
 'return
+
+Check_module_health:
+    if Rs485CommunicationCounter>18750 then     'If no RS485 communication happens after 30 seconds, reset CAN Control
+        Rs485CommunicationCounter=0
+        if mode=="L" and Mod_NEC=="E" then
+            asm
+                reset
+            endasm       
+        endif
+    endif
+return
 
 'hier dali
 Add_Dali_Tx_queue:
@@ -1672,7 +1687,7 @@ forward_can_message_to_master:
     sid=QueueRxdSid0[t]>>5
     CRC2="C"+Mod_id1c+Mod_id2c+Mod_id3c+"F"+"M"+QueueRxdNrBytes[t]+sid+QueueRxdByte0[t]
     CRC2=CRC2+QueueRxdByte1[t]+QueueRxdByte2[t]+QueueRxdByte3[t]+QueueRxdByte4[t]+QueueRxdByte5[t]+QueueRxdByte6[t]
-    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","M",QueueRxdNrBytes[t],sid,QueueRxdByte0[t],QueueRxdByte1[t],QueueRxdByte2[t],QueueRxdByte3[t],QueueRxdByte4[t],QueueRxdByte5[t],QueueRxdByte6[t],QueueRxdByte7[t],"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","M",QueueRxdNrBytes[t],sid,QueueRxdByte0[t],QueueRxdByte1[t],QueueRxdByte2[t],QueueRxdByte3[t],QueueRxdByte4[t],QueueRxdByte5[t],QueueRxdByte6[t],QueueRxdByte7[t],"C",CRC2.byte1,CRC2.byte0,13,10]
     gosub check_rs485_all_char_sent
   endif
 return
@@ -1836,7 +1851,7 @@ Check_can_message_detail:
     elseif QueueRxdByte0[t]=248 then  'Ping received (Only used in Test mode)
         if QueueRxdByte1[t]=248 then
             high RS485_mode     'send mode
-            hserout ["RC",0,0,0,0,"P","O","K",0,0,0,13,10,13,10]
+            hserout ["RC",0,0,0,0,"P","O","K",0,0,0,13,10]
             gosub check_rs485_all_char_sent 
         endif
     elseif QueueRxdByte1[t]=252 then  'NrOfSensors, ignore messages from slaves, the master is in control 
@@ -2295,26 +2310,29 @@ Interprete_Serial: 'Interprete data coming from the RS485 bus
     if InterpreteSer1=1 then
         RCSTA1.4=0               'disable receiving serial 1  
         InterpreteSer1=0
-        if pointerser1>6 then 
+        if pointerser1>6 then
+            Rs485CommunicationCounter=0 
             'hserout2 ["Message received ",dec stackser1[0]," ",dec stackser1[1]," ", dec stackser1[2]," ",dec stackser1[3]," ",dec stackser1[4]," ",dec stackser1[5]," Own ID: ",dec mod_ID1C," ",dec mod_ID2C," ",dec mod_ID3C,13,10]
             if stackser1[0]="I" then  'Input module addressed
                 gosub Check_Input_Module 
             elseif StackSer1[0]="T" then
                 gosub Check_Temperature_Module
+            elseif stackser1[0]="C" and stackser1[1]=Mod_ID1C and stackser1[2]=Mod_ID2C and stackser1[3]=Mod_ID3C then 'Own CAN module addressed
+                gosub Check_CAN_Module
+            elseif stackser1[1]=0 and stackser1[2]=0 and stackser1[3]=0 then    'Broadcast message
+                gosub broadcast_message                                 
             elseif stackser1[0]="O" or stackser1[0]="D" or stackser1[0]="R"  then  'output or dimmer module addressed
                 gosub Check_Output_Module 
             elseif stackser1[0]="o" or stackser1[0]="d" or stackser1[0]="r"  then  'output or dimmer module addressed
-                gosub Check_Output_Module
-            elseif stackser1[0]="C" and stackser1[1]=Mod_ID1C and stackser1[2]=Mod_ID2C and stackser1[3]=Mod_ID3C then 'Own CAN module addressed
-                gosub Check_CAN_Module                  
-            elseif stackser1[1]=0 and stackser1[2]=0 and stackser1[3]=0 then    'Broadcast message
-                gosub broadcast_message
+                gosub Check_Output_Module                 
             elseif mode="I" and stackser1[0]="A" and stackser1[1]="D" then   'activate device
                 gosub activate_device
             endif
         endif
         pointerser1=0
         RCSTA1.4=1            'enable receiving serial 1
+    else
+        RCSTA1.4=1            'enable receiving serial 1 
     endif
 return
 
@@ -2324,6 +2342,7 @@ Broadcast_message:      'RS485 broadcasts
         if stackser1[4]="L" and stackser1[5]="L" then   'Bus in Live mode
             if mode="I" then high LED_ST  
             mode="L"
+            Rs485CommunicationCounter=0
         elseif stackser1[4]="I" and stackser1[5]="I" then  'Bus in Initialize mode  
             if mode="L" then low LED_ST
             mode="I"          
@@ -2411,7 +2430,7 @@ return
 Test_instructions:
     if stackser1[6]="V" then  'Firmware version
         high RS485_mode     'send mode
-        hserout ["RC",0,0,0,0,"V","C",hardware,version,firmware,built,13,10,13,10]
+        hserout ["RC",0,0,0,0,"V","C",hardware,version,firmware,built,13,10]
         gosub check_rs485_all_char_sent
     elseif stackser1[6]="P" then  'Ping micro CAN as broadcast
         'hserout2 ["Ping Micro CAN",13,10]
@@ -2433,11 +2452,11 @@ Test_instructions:
         if TestSer2=1 and x=RecSer2Temp2 then       'Test OK
             gosub Led_Rxd_rs232
             high RS485_mode     'send mode
-            hserout ["RC",0,0,0,0,"R",1,0,0,0,0,13,10,13,10]
+            hserout ["RC",0,0,0,0,"R",1,0,0,0,0,13,10]
             gosub check_rs485_all_char_sent    
         else                                        'Test NOT OK
             high RS485_mode     'send mode
-            hserout ["RC",0,0,0,0,"R",0,0,0,0,0,13,10,13,10]
+            hserout ["RC",0,0,0,0,"R",0,0,0,0,0,13,10]
             gosub check_rs485_all_char_sent     
         endif         
     elseif stackser1[6]="B" then  'Provide Button state
@@ -2447,7 +2466,7 @@ Test_instructions:
         x=BUTTON2
         low led_ST
         high RS485_mode     'send mode
-        hserout ["RC",0,0,0,0,"B",1,x,13,10,13,10]
+        hserout ["RC",0,0,0,0,"B",1,x,13,10]
         gosub check_rs485_all_char_sent
         high led_ST                                   
     endif
@@ -2595,7 +2614,7 @@ return
 rs485_send5: 
   pauseus 1350
   high RS485_mode     'send mode
-  hserout ["RC",Mod_ID0E[i+29],Mod_ID1E[i+29],Mod_ID2E[i+29],Mod_ID3E[i+29],s1,s2,13,10,13,10]
+  hserout ["RC",Mod_ID0E[i+29],Mod_ID1E[i+29],Mod_ID2E[i+29],Mod_ID3E[i+29],s1,s2,13,10]
   gosub check_rs485_all_char_sent 
 return
 
@@ -2727,8 +2746,8 @@ return
 
 Check_CAN_Module:       'RS485 messages coming in
     if stackser1[4]="I" then  'Eeprom data received
-        gosub Check_Eeprom_Data
         gosub sent_can
+        gosub Check_Eeprom_Data
         'bootloader
     elseif stackser1[4]="F" then        'Firmware/Bootloader messages
         gosub check_firmware_message
@@ -2789,35 +2808,35 @@ Check_firmware_message:
             gosub Add_Txd_queue
             StdSidUsed=1      
         endif
-    'elseif stackser1[5]="X" then       'Request Eeprom Erase and factory reset
-    '    CRC2=stackser1[0]+stackser1[1]+stackser1[2]+stackser1[3]+stackser1[4]+stackser1[5]+stackser1[6]
-    '    if CRC2=((256*stackser1[8])+stackser1[9]) and stackser1[7]="C" then
-    '        if stackser1[6]=0 then
-    '            s1="X"                                'Full erase 
-    '            gosub send_F_response         
-    '            gosub erase_eeprom
-    '        endif
-    '        if stackser1[6]=1 then                                'Only erase of the NrOfInputs (and thus erase of inputs of the connected uCAN's
-    '            s1="X"
-    '            gosub send_F_response      
-    '            NrOfInputs=0
-    '            NrOfInputsNew=0   
-    '            write 304,NrOfInputs
-    '            gosub Sent_NrOfInputs        
-    '        endif
-    '        if stackser1[6]=2 then                                'Only erase of the NrOfSensors (and thus erase of sensors of the connected uCAN's
-    '            s1="X"
-    '            gosub send_F_response       
-    '            NrOfSensors=0
-    '            NrOfSensorsNew=0   
-    '            write 305,NrOfSensors
-    '            gosub Sent_NrOfSensors        
-    '        endif
-    '    else              'CRC error
-    '        error_code=4
-    '        s1="X"
-    '        gosub send_F_response
-    '    endif                      
+    elseif stackser1[5]="X" then       'Request Eeprom Erase and factory reset
+        CRC2=stackser1[0]+stackser1[1]+stackser1[2]+stackser1[3]+stackser1[4]+stackser1[5]+stackser1[6]
+        if CRC2=((256*stackser1[8])+stackser1[9]) and stackser1[7]="C" then
+            if stackser1[6]=0 then
+                s1="X"                                'Full erase 
+                gosub send_F_response         
+                gosub erase_eeprom
+            endif
+            if stackser1[6]=1 then                                'Only erase of the NrOfInputs (and thus erase of inputs of the connected uCAN's
+                s1="X"
+                gosub send_F_response      
+                NrOfInputs=0
+                NrOfInputsNew=0   
+                write 304,NrOfInputs
+                gosub Sent_NrOfInputs        
+            endif
+            if stackser1[6]=2 then                                'Only erase of the NrOfSensors (and thus erase of sensors of the connected uCAN's
+                s1="X"
+                gosub send_F_response       
+                NrOfSensors=0
+                NrOfSensorsNew=0   
+                write 305,NrOfSensors
+                gosub Sent_NrOfSensors        
+            endif
+        else              'CRC error
+            error_code=4
+            s1="X"
+            gosub send_F_response
+        endif                      
     elseif stackser1[5]="R" then       'Perform Reset of the module
         write 330,stackser1[6]                                'Write number of seconds that this module must remain in bootloader mode
         s1="R"
@@ -2836,19 +2855,19 @@ send_F_response:
   high RS485_mode       'send mode
   if s1="V" then        'Firmware version   "FV
     CRC2="C"+Mod_id1c+Mod_id2c+Mod_id3c+"F"+"V"+255+hardware+version+firmware+built
-    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","V",255,hardware,version,firmware,built,0,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
-    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","V",255,hardware,version,firmware,built,0,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","V",255,hardware,version,firmware,built,0,"C",CRC2.byte1,CRC2.byte0,13,10]
+    'hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","V",255,hardware,version,firmware,built,0,"C",CRC2.byte1,CRC2.byte0,13,10]
     gosub check_rs485_all_char_sent
   elseif s1="R" then    'Reset              "FR
     CRC2="C"+Mod_id1c+Mod_id2c+Mod_id3c+"F"+"R"+255
-    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","R",255,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
-    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","R",255,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","R",255,"C",CRC2.byte1,CRC2.byte0,13,10]
+    'hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","R",255,"C",CRC2.byte1,CRC2.byte0,13,10]
     gosub check_rs485_all_char_sent
     'Hserout2 ["Firmware R instruction ",dec stackser1[6],13,10]
   elseif s1="X" then    'Erase Eeprom       "FX
     CRC2="C"+Mod_id1c+Mod_id2c+Mod_id3c+"F"+"X"+error_code
-    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","X",error_code,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
-    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","X",error_code,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+    hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","X",error_code,"C",CRC2.byte1,CRC2.byte0,13,10]
+    'hserout ["RC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","X",error_code,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
     gosub check_rs485_all_char_sent
     'Hserout2 ["Firmware R instruction ",dec stackser1[6],13,10]
   elseif s1="S" then    'Respond on Request of Master (NrOfCanModules, CAN id's)    "FS
@@ -2876,65 +2895,68 @@ return
 
 sent_fs_message:
   CRC2="C"+Mod_id1c+Mod_id2c+Mod_id3c+"F"+"S"+stackser1[6]+stackser1[7]+s2+s3+s4
-  hserout ["AAARC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","S",stackser1[6],stackser1[7],s2,s3,s4,0,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+  hserout ["AAARC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","S",stackser1[6],stackser1[7],s2,s3,s4,0,"C",CRC2.byte1,CRC2.byte0,13,10]
   'hserout ["AAARC","C",Mod_id1c,Mod_id2c,Mod_id3c,"F","S",stackser1[6],stackser1[7],s2,s3,s4,"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
 return
 
 Check_input_module:
-  if NrOfInputModules>0 then
-    InputCount=0
-    exit_now=0
-    for s=1 to (NrOfSensorModules+NrOfInputModules+NrOfCanControlModules)
-      if stackser1[0]=Mod_id0_I[s-1] and stackser1[1]=Mod_id1_I[s-1] and stackser1[2]=Mod_id2_I[s-1] and stackser1[3]=Mod_id3_I[s-1] then
-        if stackser1[4]="I" then
-          BootLoadMode=0
-          gosub Check_Eeprom_Data
-          indicate=stackser1[5]
-          if Indicate<>255 then
-            IndicateSet=1
-            IndicateTimer=0
-            'gosub All_leds_off              
-            QueueTxdByte0[QueueTxdPointer]=0
-            QueueTxdByte1[QueueTxdPointer]=3         'Set Led
-            QueueTxdByte2[QueueTxdPointer]=(inputCount*8)+indicate     'Led Number
-            QueueTxdByte3[QueueTxdPointer]=254       'Led value
-            QueueTxdByte4[QueueTxdPointer]=4         'Led function (4: dim up ...down...up...)
-            QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
-            QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
-            QueueTxdNrBytes[QueueTxdPointer]=6 
-            gosub Add_Txd_queue
-            QueueTxdByte0[QueueTxdPointer]=0
-            QueueTxdByte1[QueueTxdPointer]=5         'Led indicate
-            QueueTxdByte2[QueueTxdPointer]=(inputCount*8)+indicate     'Led Number
-            QueueTxdByte3[QueueTxdPointer]=254       'Led value
-            QueueTxdByte4[QueueTxdPointer]=4         'Led function (4: dim up ...down...up...)
-            QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
-            QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
-            QueueTxdNrBytes[QueueTxdPointer]=6 
-            gosub Add_Txd_queue              
-            if IndicateOld<>(((s-1)*8)+indicate) and IndicateOld<240 then
-              QueueTxdByte0[QueueTxdPointer]=0
-              QueueTxdByte1[QueueTxdPointer]=3         'Set Led
-              QueueTxdByte2[QueueTxdPointer]=IndicateOld     'Led Number
-              QueueTxdByte3[QueueTxdPointer]=0         'Led value
-              QueueTxdByte4[QueueTxdPointer]=0         'Led function (0: on/off)
-              QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
-              QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
-              QueueTxdNrBytes[QueueTxdPointer]=6 
-              gosub Add_Txd_queue              
-            endif              
-            IndicateOld=(inputCount*8)+indicate             
-          else
-            gosub check_output_data
-          endif         
-          gosub sent_input               
-        endif
-        exit_now=1  'exit  
-      endif
-      if Mod_id0_I[s-1]="I" then InputCount=InputCount+1
-      if exit_now=1 then s=30      
-    next s
-  endif              
+    if NrOfInputModules>0 then
+        InputCount=0
+        exit_now=0
+        for s=1 to (NrOfSensorModules+NrOfInputModules+NrOfCanControlModules)
+            if stackser1[0]="I" then
+                if stackser1[1]=Mod_id1_I[s-1] and stackser1[2]=Mod_id2_I[s-1] and stackser1[3]=Mod_id3_I[s-1] then
+                    if stackser1[4]="I" then
+                        BootLoadMode=0
+                        gosub sent_input
+                        gosub Check_Eeprom_Data
+                        indicate=stackser1[5]
+                        if Indicate<>255 then
+                            IndicateSet=1
+                            IndicateTimer=0
+                            'gosub All_leds_off              
+                            QueueTxdByte0[QueueTxdPointer]=0
+                            QueueTxdByte1[QueueTxdPointer]=3         'Set Led
+                            QueueTxdByte2[QueueTxdPointer]=(inputCount*8)+indicate     'Led Number
+                            QueueTxdByte3[QueueTxdPointer]=254       'Led value
+                            QueueTxdByte4[QueueTxdPointer]=4         'Led function (4: dim up ...down...up...)
+                            QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
+                            QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
+                            QueueTxdNrBytes[QueueTxdPointer]=6 
+                            gosub Add_Txd_queue
+                            QueueTxdByte0[QueueTxdPointer]=0
+                            QueueTxdByte1[QueueTxdPointer]=5         'Led indicate
+                            QueueTxdByte2[QueueTxdPointer]=(inputCount*8)+indicate     'Led Number
+                            QueueTxdByte3[QueueTxdPointer]=254       'Led value
+                            QueueTxdByte4[QueueTxdPointer]=4         'Led function (4: dim up ...down...up...)
+                            QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
+                            QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
+                            QueueTxdNrBytes[QueueTxdPointer]=6 
+                            gosub Add_Txd_queue              
+                            if IndicateOld<>(((s-1)*8)+indicate) and IndicateOld<240 then
+                                QueueTxdByte0[QueueTxdPointer]=0
+                                QueueTxdByte1[QueueTxdPointer]=3         'Set Led
+                                QueueTxdByte2[QueueTxdPointer]=IndicateOld     'Led Number
+                                QueueTxdByte3[QueueTxdPointer]=0         'Led value
+                                QueueTxdByte4[QueueTxdPointer]=0         'Led function (0: on/off)
+                                QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
+                                QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
+                                QueueTxdNrBytes[QueueTxdPointer]=6 
+                                gosub Add_Txd_queue              
+                            endif              
+                            IndicateOld=(inputCount*8)+indicate             
+                        else
+                            gosub check_output_data
+                        endif         
+                        'gosub sent_input               
+                    endif
+                    exit_now=1  'exit 
+                endif     
+            endif
+            if Mod_id0_I[s-1]="I" then InputCount=InputCount+1
+            if exit_now=1 then s=30      
+        next s
+    endif              
 return
 
 sent_input:
@@ -2970,45 +2992,44 @@ return
 
 
 Check_Temperature_Module:
-  if NrOfSensorModules>0 then
-    SensorCount=0
-    exit_now=0
-    SensorCT=0
-    for s=1 to (NrOfSensorModules+NrOfInputModules+NrOfCanControlModules)
-      if Mod_id0_I[s-1]="T" then
-        SensorCT=SensorCT+1       
-        if stackser1[1]=Mod_id1_I[s-1] and stackser1[2]=Mod_id2_I[s-1] and stackser1[3]=Mod_id3_I[s-1] then      
-          indicate=stackser1[5]
-          if Indicate<>255 then
-            IndicateSet=1
-            IndicateTimer=0
-            'gosub All_leds_off             
-            QueueTxdByte0[QueueTxdPointer]=0
-            QueueTxdByte1[QueueTxdPointer]=4         'Set Indicate Sensor
-            QueueTxdByte2[QueueTxdPointer]=((SensorCT-1)*8)+indicate  'Sensor Number
-            QueueTxdByte3[QueueTxdPointer]=1         'Led on(1)/off(0)
-            QueueTxdByte4[QueueTxdPointer]=4         'Led function (4: dim up ...down...up...)
-            QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
-            QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
-            QueueTxdNrBytes[QueueTxdPointer]=6 
-            gosub Add_Txd_queue                 
-            IndicateSensorOld=((SensorCT-1)*8)+indicate              
-          endif         
-          'gosub Check_queue        
-          if stackser1[4]="T" then        'Temperature
-            gosub rs485_send2
-          elseif stackser1[4]="H" then    'Humidity 
-            gosub rs485_send3
-          elseif stackser1[4]="A" then    'ADC value
-            gosub rs485_send4
-          endif        
-          exit_now=1  'exit  
-        endif
-      endif  
-      if Mod_ID0_I[s-1]="T" then SensorCount=SensorCount+1            
-      if exit_now=1 then s=30      
-    next s
-  endif         
+    if NrOfSensorModules>0 then
+        SensorCount=0
+        exit_now=0
+        SensorCT=0
+        for s=1 to (NrOfSensorModules+NrOfInputModules+NrOfCanControlModules)
+            if Mod_id0_I[s-1]="T" then
+                SensorCT=SensorCT+1       
+                if stackser1[1]=Mod_id1_I[s-1] and stackser1[2]=Mod_id2_I[s-1] and stackser1[3]=Mod_id3_I[s-1] then                      
+                    if stackser1[4]="T" then        'Temperature
+                        gosub rs485_send2
+                    elseif stackser1[4]="H" then    'Humidity 
+                        gosub rs485_send3
+                    elseif stackser1[4]="A" then    'ADC value
+                        gosub rs485_send4
+                    endif
+                    indicate=stackser1[5]
+                    if Indicate<>255 then
+                        IndicateSet=1
+                        IndicateTimer=0
+                        'gosub All_leds_off             
+                        QueueTxdByte0[QueueTxdPointer]=0
+                        QueueTxdByte1[QueueTxdPointer]=4         'Set Indicate Sensor
+                        QueueTxdByte2[QueueTxdPointer]=((SensorCT-1)*8)+indicate  'Sensor Number
+                        QueueTxdByte3[QueueTxdPointer]=1         'Led on(1)/off(0)
+                        QueueTxdByte4[QueueTxdPointer]=4         'Led function (4: dim up ...down...up...)
+                        QueueTxdTime[QueueTxdPointer]=0          'sent message immeadiatly 
+                        QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
+                        QueueTxdNrBytes[QueueTxdPointer]=6 
+                        gosub Add_Txd_queue                 
+                        IndicateSensorOld=((SensorCT-1)*8)+indicate              
+                    endif                  
+                    exit_now=1  'exit  
+                endif
+            endif  
+            if Mod_ID0_I[s-1]="T" then SensorCount=SensorCount+1            
+            if exit_now=1 then s=30      
+        next s
+    endif         
 return
 
 Check_Output_Data:
@@ -3493,14 +3514,14 @@ rs485_send:
     u=Mod_ID3_O[s-31]  
   endif
   high RS485_mode     'send mode
-  hserout ["RC",x,y,z,u,s1,s2,s3,s4,s5,s6,s7,s8,13,10,13,10]
+  hserout ["RC",x,y,z,u,s1,s2,s3,s4,s5,s6,s7,s8,13,10]
   gosub check_rs485_all_char_sent 
 return
 
 rs485_send6:
   pauseus 1350
   high RS485_mode     'send mode
-  hserout ["RC","C",Mod_ID1C,Mod_ID2C,Mod_ID3C,s1,s2,s3,s4,s5,s6,s7,s8,13,10,13,10]
+  hserout ["RC","C",Mod_ID1C,Mod_ID2C,Mod_ID3C,s1,s2,s3,s4,s5,s6,s7,s8,13,10]
   gosub check_rs485_all_char_sent 
 return
 
@@ -3511,7 +3532,7 @@ rs485_send2:
     CRC2="T"+temperature[z]+temperature[z+1]+temperature[z+2]+temperature[z+3]
     CRC2=CRC2+temperature[z+4]+temperature[z+5]+temperature[z+6]+temperature[z+7]  
     high RS485_mode           'send mode
-    hserout ["RC",Mod_ID0_I[s-1],Mod_ID1_I[s-1],Mod_ID2_I[s-1],Mod_ID3_I[s-1],"T",temperature[z],temperature[z+1],temperature[z+2],temperature[z+3],temperature[z+4],temperature[z+5],temperature[z+6],temperature[z+7],"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+    hserout ["RC",Mod_ID0_I[s-1],Mod_ID1_I[s-1],Mod_ID2_I[s-1],Mod_ID3_I[s-1],"T",temperature[z],temperature[z+1],temperature[z+2],temperature[z+3],temperature[z+4],temperature[z+5],temperature[z+6],temperature[z+7],"C",CRC2.byte1,CRC2.byte0,13,10]
     gosub check_rs485_all_char_sent 
   endif  
 return
@@ -3523,7 +3544,7 @@ rs485_send3:
     CRC2="H"+humidity[z]+humidity[z+1]+humidity[z+2]+humidity[z+3]
     CRC2=CRC2+humidity[z+4]+humidity[z+5]+humidity[z+6]+humidity[z+7]
     high RS485_mode           'send mode
-    hserout ["RC",Mod_ID0_I[s-1],Mod_ID1_I[s-1],Mod_ID2_I[s-1],Mod_ID3_I[s-1],"H",humidity[z],humidity[z+1],humidity[z+2],humidity[z+3],humidity[z+4],humidity[z+5],humidity[z+6],humidity[z+7],"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+    hserout ["RC",Mod_ID0_I[s-1],Mod_ID1_I[s-1],Mod_ID2_I[s-1],Mod_ID3_I[s-1],"H",humidity[z],humidity[z+1],humidity[z+2],humidity[z+3],humidity[z+4],humidity[z+5],humidity[z+6],humidity[z+7],"C",CRC2.byte1,CRC2.byte0,13,10]
     gosub check_rs485_all_char_sent
   endif   
 return
@@ -3535,7 +3556,7 @@ rs485_send4:
     CRC2="A"+AdcValue[z]+AdcValue[z+1]+AdcValue[z+2]+AdcValue[z+3]
     CRC2=CRC2+AdcValue[z+4]+AdcValue[z+5]+AdcValue[z+6]+AdcValue[z+7]
     high RS485_mode           'send mode
-    hserout ["RC",Mod_ID0_I[s-1],Mod_ID1_I[s-1],Mod_ID2_I[s-1],Mod_ID3_I[s-1],"A",AdcValue[z],AdcValue[z+1],AdcValue[z+2],AdcValue[z+3],AdcValue[z+4],AdcValue[z+5],AdcValue[z+6],AdcValue[z+7],"C",CRC2.byte1,CRC2.byte0,13,10,13,10]
+    hserout ["RC",Mod_ID0_I[s-1],Mod_ID1_I[s-1],Mod_ID2_I[s-1],Mod_ID3_I[s-1],"A",AdcValue[z],AdcValue[z+1],AdcValue[z+2],AdcValue[z+3],AdcValue[z+4],AdcValue[z+5],AdcValue[z+6],AdcValue[z+7],"C",CRC2.byte1,CRC2.byte0,13,10]
     gosub check_rs485_all_char_sent 
   endif  
 return
@@ -3681,7 +3702,7 @@ check_inputs: 'during initialization, inputs needs to be checked
     InitOngoing=1
     gosub generate_id
     high RS485_mode     'send mode
-    hserout ["RC","C",Mod_ID1C,Mod_ID2C,Mod_ID3C,0,Mod_NEC,"T","C",0,0,0,0,13,10,13,10]
+    hserout ["RC","C",Mod_ID1C,Mod_ID2C,Mod_ID3C,0,Mod_NEC,"T","C",0,0,0,0,13,10]
     gosub check_rs485_all_char_sent
     gosub Wait_For_Feedback 
     if NrOfInputs>0 or NrOfSensors>0 then
