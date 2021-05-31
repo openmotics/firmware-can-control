@@ -27,11 +27,11 @@
 @ CONFIG SOSCSEL=DIG
 
 '-----------Constants--------------------------
-hardware                con     1
+HARDWARE                con     1
 
-version                 con     4
-firmware                con     1
-built                   con     37
+VERSION                 con     4
+FIRMWARE                con     1
+BUILT                   con     37
 
 MAX_NUMBER_CAN_MODULES  con     39
 MAX_NUMBER_CAN_INPUTS   CON     232
