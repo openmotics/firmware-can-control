@@ -1,0 +1,2152 @@
+'************************************************************************
+'Copyright (c) 2020 - OpenMotics <info@openmotics.com>
+
+'This file is part of OpenMotics.
+
+'OpenMotics is free software: you can redistribute it and/or modify
+'it under the terms of the GNU General Public License as published by
+'the Free Software Foundation, either version 3 of the License, or
+'(at your option) any later version.
+
+'OpenMotics is distributed in the hope that it will be useful,
+'but WITHOUT ANY WARRANTY; without even the implied warranty of
+'MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+'GNU General Public License for more details.
+
+'You should have received a copy of the GNU General Public License
+'along with OpenMotics.  If not, see <http://www.gnu.org/licenses/>.
+'************************************************************************
+
+'Firmware to be used with the OpenMotics Can Control in combination with Core or Core+
+
+'Written in Pic Basic Pro 2.6 however it should be compatible with Pic Basic Pro 3.0 but this is not yet tested
+'Interrupt system of Darrel Taylor is used see http://darreltaylor.com/DT_INTS-18/home.html
+'For more information see wiki.openmotics.com
+
+'ONLY WORKS WITH GEN3 HW and ONLY CORE/CORE+!!!
+
+@ CONFIG SOSCSEL=DIG
+
+'------------------Constants----------------------------------------------------
+VERSION                 con         6
+FIRMWARE                con         0
+BUILT                   con         35
+
+hardware                con         4
+
+MAXRS485RXQUEUE         con         100
+MAXRS485TXQUEUE         con         100
+MAXRS485LENGTH          con         11  'Max length (in RS485 message) that can be used. Cannot be increased without changing variables A_Queue_...
+
+SENT_START              con         0
+REPEATED_START          con         1
+SENT_ADDRESS_W          con         2
+SENT_ADDRESS_R          con         3
+CHECK_ACK               con         4
+SENT_COMMANDCODE        con         5
+SENT_COMMANDDATA        con         6
+SENT_COMMANDDATA1       con         7
+SENT_COMMANDDATA2       con         8
+SENT_COMMANDDATA3       con         9
+SENT_ACK                con         10
+SENT_NACK               con         11
+SENT_STOP               CON         12
+CHECK_INTERRUPT         con         13
+ENABLE_RECEIVING        con         14
+RECEIVE_DATA            con         15
+PROCESS_DONE            con         16
+SET_WAITTIME_1MS        con         17
+SET_WAITTIME_10MS       con         18
+WAIT_NOW                con         19
+
+MAXI2CBYTES             con         5
+MAXI2CSTEPS             con         45
+
+UPDATELEDS              con         0
+READINPUT               con         1
+READRS485               con         2
+BLOCKINGI2C             con         7
+
+MAXSTATEMACHINES        con         8
+MAX_RS485_MESSAGES      con         1       'Max RS485 messages towards Master in 1 communication flow (Max is 8)
+
+START                   con         0
+STEP1                   con         1
+STEP2                   con         2
+STEP3                   con         3
+STEP4                   con         4
+STEP5                   con         5
+STEP6                   con         6
+STEP7                   con         7
+STEP8                   con         8
+STEP9                   con         9
+STEP10                  con         10
+
+PRESSED                 con         0
+RELEASED                con         1
+
+BROADCASTMESSAGE        con         0
+CANCONTROLMESSAGE       con         1
+ACTIVATEDEVICEMESSAGE   con         2
+
+EMPTY_MESSAGE           con         0
+CAN_MESSAGE             con         1
+DALI_MESSAGE            con         2
+
+TCA9539_0_ADDRESS       con         %11101011  'Chip for leds and buttons 6T and 37
+TCA9539_1_ADDRESS       con         %11101101  'Chip for leds 6T
+TCA9539_2_ADDRESS       con         %11101110
+TCA9539_3_ADDRESS       con         %11101100
+PCF8574_ADDRESS         con         %01000000
+PCF8574A_ADDRESS        con         %01110000
+LM75_ADDRESS            con         %10011110
+FM24C04_ADDRESS         con         %10100100   'FRAM
+F24FC1025_ADDRESS       con         %10101010
+M24C02_ADDRESS          con         %10101100   'Small eeprom for serial address etc 
+
+BUFFER_UART_RX          con         180
+YES                     con         1
+NO                      con         0
+OK                      con         1
+NOK                     con         0
+LED_OFF                 con         0
+LED_ON                  con         1
+BLINK_ON                con         1
+BLINK_OFF               con         0
+TCA9539_FOUND           var         ic_found.bit0
+SMALL_EEPROM_FOUND      var         ic_found.bit1
+LARGE_EEPROM_FOUND      var         ic_found.bit2
+FRAM_FOUND              var         ic_found.bit3
+LM75_FOUND              var         ic_found.bit4
+LED_STATUS_RED          VAR         led_data.bit9
+LED_STATUS_GREEN        var         led_data.bit10
+LED_CANBUS_RED          var         led_data.bit7
+LED_CANBUS_GREEN        var         led_data.bit8
+LED_CANCOM              var         led_data.bit0
+
+LED_STATUS_RED_BLINK    VAR         led_data_blink.bit9
+LED_STATUS_GREEN_BLINK  var         led_data_blink.bit10
+LED_CANBUS_RED_BLINK    var         led_data_blink.bit7
+LED_CANBUS_GREEN_BLINK  var         led_data_blink.bit8
+LED_CANCOM_BLINK        var         led_data_blink.bit0
+
+
+'------------Includes----------------------------
+include "PIC18CAN.bas"
+
+DEFINE  USE_LOWPRIORITY     1
+define  NO_CLRWDT           1   ; No automatic clear watchdog timer
+INCLUDE "DT_INTS-18F45K80.bas"  ; Base Interrupt System
+INCLUDE "ReEnterPBP-18.bas"     ; Include if using PBP interrupts
+INCLUDE "ReEnterPBP-18LP.bas"   ; Include if using Low Pr. PBP INTS
+
+CLEARWDT
+
+' -------- Hardware configuration ------------------------------------------------------
+ANCON0=%00000000   'All ports configured as digital ports
+ANCON1=%00000000   'All ports configured as digital ports
+TRISA=%00111111
+TRISB=%11101011
+TRISC=%10111101
+TRISD=%11001111
+TRISE=%11111001
+
+RS485_DIR               var         PORTD.4     'Mode for RS485 chip (send or receive)
+RESET_PIN               VAR         PORTE.2     'Reset pin of TCA9538 (gnd to reset)
+INTERRUPT_PIN           VAR         PORTE.1     'Interrupt pin from TCA9538
+CAN_POWER_OUT           var         PORTD.5     'Switch ON/OFF power CAN bus (High=ON)
+OUTPUT_SEL              var         PORTA.0     'Pin that selects between RS232 OUT or UART out via debug pin (HIGH=debug pin)
+
+output                  RS485_DIR
+low                     RS485_DIR
+input                   PORTC.7
+output                  PORTC.6
+output                  RESET_PIN 
+high                    RESET_PIN 
+INPUT                   INTERRUPT_PIN
+OUTPUT                  OUTPUT_SEL
+high                    OUTPUT_SEL              'HIGH->Debug pin is selected, LOW->RS232 TXD is selected
+OUTPUT                  CAN_POWER_OUT      
+
+'--------40Mhz (external xtal 10Mhz PLL to 40Mhz------------------
+' For PBP2.6 (not for 3.0) please modify 18F45K80.inc (in directory /PBP)
+' Modification: CONFIG FOSC = HS1
+DEFINE              OSC     40
+OSCCON.0=0                          'external oscillator
+OSCCON.1=0
+OSCTUNE.6=1                         'PLL enabled
+BAUDCON1.5=0                        'receive data is not inverted
+BAUDCON1.3=1                        'BRG16=1
+BAUDCON1.4=0                        'idle state for Txd is 1
+SPBRGH1 = 0                         '115200 baud
+SPBRG1 = 86
+RCSTA1 = %00010000
+TXSTA1 = %00000100
+'BAUDCON2.5=0                        'receive data is not inverted
+'BAUDCON2.3=1                        'BRG16=1
+'BAUDCON2.4=0                        'idle state for Txd is 1
+'SPBRGH2 = 1                         '38400 baud
+'SPBRG2 = 3
+'RCSTA2 = %00010000
+'TXSTA2 = %00000100
+BAUDCON2.5=0                        'receive data is not inverted
+BAUDCON2.3=1                        'BRG16=1
+BAUDCON2.4=0                        'idle state for Txd is 1
+SPBRGH2 = 0                         '115200 baud
+SPBRG2 = 86
+RCSTA2 = %00010000
+TXSTA2 = %00000100
+T0CON=%10000010                 ; T0 = 16-bit, 1:8 Prescaler
+T2CON=%00111100
+T4CON=%01111011                     'Interrupt every 6.5ms
+SSPADD.0=0  
+SSPADD.1=0
+SSPADD.2=0
+SSPADD.3=1
+SSPADD.4=1
+SSPADD.5=0
+SSPADD.6=0
+SSPCON1=%00101000                   'turn on MSSP and set for master mode i2c
+SSPSTAT.7=1                         'Slew rate off 
+CCP2CON=0
+
+'--------------------Variables--------------------------------------------------
+Mod_ID0                     var     byte
+Mod_ID1                     var     byte
+Mod_ID2                     var     byte
+Mod_ID3                     var     byte
+Mod_NE                      var     byte        'N->New module,E->Existing module
+x                           var     byte
+y                           var     byte
+z                           var     byte
+q                           var     byte
+QueueCheck                  var     byte
+s                           var     byte
+s1                          var     byte
+s2                          var     byte
+i                           var     byte
+t                           var     byte
+j                           var     byte
+w1                          var     word
+tmp                         var     byte[8]
+test                        var     byte
+reset_count                 var     word
+mode                        var     byte
+A_StackSer1                 var     byte[BUFFER_UART_RX]
+RecSer1                     var     bit   '=1 in receiving mode
+RecSerTemp1                 var     byte
+RecSerTemp2                 var     byte
+PointerSer1                 var     byte
+InterpreteSer1              var     bit
+broadcast                   var     bit
+counter                     var     byte
+i2ccont                     var     byte     'chip address
+A_i2cdata                   var     byte[MAXI2CBYTES]     'data to read or write
+i2cdataTemp                 var     byte
+i2cMode                     var     byte
+i2cModeOld                  var     byte
+i2cAck                      var     bit
+i2cCommandCode              var     byte
+i2cCommandData              var     byte
+i2cCommandData1             var     byte
+i2cCommandData2             var     byte
+i2cCommandData3             var     byte
+i2cNextStep                 var     bit
+instruction_done            var     bit
+A_I2cStep                   var     byte[MAXI2CSTEPS]
+Fase                        var     byte
+ByteNr                      var     byte
+i2cBusy                     var     bit
+i2cWaitTime                 var     byte
+i2cerror                    var     word
+tca9539_data                var     word
+tca9539_data_old            var     word
+led_data                    var     word
+led_data_blink              var     word
+blink_invert                var     word
+temp_result                 var     word
+err                         var     byte
+Action_button               var     bit
+Power_button                var     bit
+Rec                         var     byte
+RS485_message_type          var     byte
+ic_found                    var     byte
+A_state_machine_phase       var     byte[MAXSTATEMACHINES]
+current_i2c_state_machine   var     byte
+blink_counter               var     word
+print_error                 var     bit
+
+A_Queue_rx_instr_type       var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_length           var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D0               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D1               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D2               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D3               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D4               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D5               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D6               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_D7               var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_SIDH             var     byte[MAXRS485RXQUEUE]
+A_Queue_rx_SIDL             var     byte[MAXRS485RXQUEUE]
+rx_start_pointer            var     byte
+rx_end_pointer              var     byte
+rx_queue_size               var     byte
+
+A_Queue_tx_instr_type       var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_length           var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D0               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D1               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D2               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D3               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D4               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D5               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D6               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_D7               var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_SIDH             var     byte[MAXRS485TXQUEUE]
+A_Queue_tx_SIDL             var     byte[MAXRS485TXQUEUE]
+tx_start_pointer            var     byte
+tx_end_pointer              var     byte
+tx_queue_size               var     byte
+
+last_can_sent               var     byte[8]
+last_can_received           var     byte[8]
+
+rs485_instr_type            var     byte
+rs485_length                var     byte    
+rs485_additional_data       var     byte
+rs485_sidh                  var     byte
+rs485_sidl                  var     byte
+A_rs485_data                var     byte[MAXRS485LENGTH-3]
+
+crc                         var     word
+crc_ok                      var     bit
+crc_begin                   var     byte
+crc_end                     var     byte
+
+temp_queue_size             var     byte
+InterruptVar                var     byte
+CanError                    var     byte
+health_status               var     byte
+
+'hier search module
+selection_byte              var     byte
+send_message                var     bit
+message_check               var     byte[8]
+startup_master              var     byte
+startup_master=YES
+
+Can_power_wait_counter      var     byte
+Can_power_wait_active       var     bit
+Can_message_sent            var     bit
+Can_message_double          var     bit
+Can_message_check           var     byte
+Can_power_wait_counter=0
+Can_power_wait_active=NO
+Can_message_sent=NO
+Can_message_double=NO
+
+Serial_year                 var     byte
+Serial_month                var     byte
+Serial_day                  var     byte
+Serial_prod_company         var     byte
+Serial_number               var     word
+Serial_errors               var     byte
+test_mode                   var     bit
+test_mode=NO
+Rs485CommunicationCounter   var     word
+Rs485CommunicationCounter=0
+can_errors                  var     word
+can_errors=0
+
+'hier init
+init_message_sent       var     bit
+init_message_sent=NO
+automatic_module_search var     bit
+automatic_module_search=NO
+            
+read 240,Serial_year
+read 241,Serial_month
+read 242,Serial_day
+read 243,Serial_prod_company
+read 244,Serial_number.byte1
+read 245,Serial_number.byte0
+read 246,Serial_errors
+if serial_year>99 or serial_month==0 or serial_month>12 or serial_day==0 or serial_day>31 then
+    Serial_year=0
+    Serial_month=0
+    Serial_day=0
+    Serial_prod_company=0
+    Serial_number.byte1=0
+    Serial_number.byte0=0
+    Serial_errors=0
+endif
+
+'-----------Reset and set variables------------------------------
+input PORTC.7
+output PORTC.6
+high CAN_POWER_OUT     'CAN Power ON
+
+CLEARWDT
+
+
+'--------------Set Variables----------------------------------------------------
+reset_count=0
+RecSer1=NO
+PointerSer1=0
+InterpreteSer1=NO
+mode="L"
+tca9539_data=65535
+tca9539_data_old=0
+led_data_blink=0
+i2cMode=0
+i2cerror=0
+Action_button=RELEASED
+Power_button=RELEASED
+i2cBusy=NO
+current_i2c_state_machine=BLOCKINGI2C
+A_state_machine_phase[UPDATELEDS]=START
+A_state_machine_phase[READINPUT]=START
+A_state_machine_phase[READRS485]=START
+blink_counter=0
+blink_invert=0
+rx_start_pointer=0
+rx_end_pointer=0
+tx_start_pointer=0
+tx_end_pointer=0
+rx_queue_size=0
+tx_queue_size=0
+i2cWaitTime=0
+CanError=0
+
+;----[High Priority Interrupts]-----------------------------------------------
+ASM
+INT_LIST  macro    ; IntSource,             Label,  Type, ResetFlag?
+        INT_Handler     RX1_INT,          _Receive1,   PBP,  no
+        INT_Handler     RX2_INT,          _Receive2,   PBP,  no                
+    endm
+    INT_CREATE               ; Creates the High Priority interrupt processor
+
+;----[Low Priority Interrupts]------------------------------------------------
+INT_LIST_L  macro  ; IntSource,        Label,       Type, ResetFlag?
+        INT_Handler     TMR0_INT,       _Timer0,    PBP,  yes       
+        INT_Handler     TMR2_INT,       _Timer2,    PBP,  yes 
+        INT_Handler     TMR4_INT,       _Timer4,    PBP,  yes         
+        INT_Handler     SSP_INT,        _SSP,       PBP,  no 
+        INT_Handler     CAN_RXB0_INT,   _RecCAN0,   PBP,  yes
+        INT_Handler     CAN_RXB1_INT,   _RecCAN1,   PBP,  yes                
+    endm
+    INT_CREATE_L             ; Creates the Low Priority interrupt processor
+ENDASM
+
+
+@    INT_ENABLE  RX1_INT       ; Enable USART Receive interrupts
+@    INT_ENABLE  RX2_INT       ; Enable USART Receive interrupts
+@    INT_ENABLE  TMR0_INT      ; enable Timer 0 interrupts
+@    INT_ENABLE  TMR2_INT      ; enable Timer 2 interrupts
+@    INT_ENABLE  TMR4_INT      ; enable Timer 4 interrupts
+@    INT_ENABLE  CAN_RXB0_INT  ; enable CAN0 Receive interrupts
+@    INT_ENABLE  CAN_RXB1_INT  ; enable CAN1 Receive interrupts
+@    INT_ENABLE  SSP_INT
+
+
+RCON.7=1    'enable High/Low interrupt
+INTCON.7=0  'Disable all interrupts during configuration
+INTCON.6=0
+TMR0L=0     'reset value
+TMR0H=0
+T0CON.7=0   'timer 0 disabled
+PIE1.1=1    'timer 2 interrupt enabled
+PIE4.7=1    'timer 4 interrupt enable
+T2CON.2=0   'start timer2 later
+'T4CON.2=0   'start timer4 later
+PIE1.3=1    'enable SSP interrupt
+INTCON.6=1
+INTCON.7=1
+RCSTA1.7=1  'Enable UART1
+RCSTA1.4=0  'disable UART1 receiver
+PIE1.5=1    'Enable receive UART1 interrupt
+PIR1.5=0    'Clear RC1IF
+RCSTA1.4=1  'enable UART1 receiver
+TXSTA1.5=1  'enable UART1 transmit
+RCSTA2.7=1  'Enable UART2
+RCSTA2.4=1  'enable UART2 receiver
+TXSTA2.5=1  'enable UART2 transmit
+
+read 0,Mod_NE   'Mode_ID in eeprom controller, "N"->New and generated by module, "P"->New and programmed in factory, "E"->Existing
+read 1,Mod_ID0
+read 2,Mod_ID1
+read 3,Mod_ID2
+read 4,Mod_ID3
+
+if Mod_ID0!="C" then
+    Mod_ID0 = "C"
+    write 1,Mod_ID0
+endif
+
+if Mod_NE==255 then Mod_NE="N"
+CLEARWDT
+
+'---------INIT CAN--------------------
+gosub init_CAN
+   
+T2CON.2=1     'Start Timer
+
+CLEARWDT
+
+'gosub check_hardware 
+gosub check_startupreset  'check if reset
+
+'bootloader, see http://wiki.openmotics.com/index.php/Bootloader
+read 64,x       'Read Hardware version
+if x<>hardware then 
+  write 64,hardware
+endif
+read 65,x       'Read Major firmware version
+if x<>version then 
+  write 65,version
+endif
+read 66,x       'Read Minor firmware version
+if x<>firmware then 
+  write 66,firmware
+endif
+read 67,x       'Read Minor firmware version
+if x<>built then 
+  write 67,built
+endif 
+'read 74,x       'Read Flashmode variable and put on 0 so the bootloader knows the app is running 
+write 74,0
+write 75,0      'Set Bootloader time on 0 seconds
+
+gosub check_hardware
+gosub Nightrider_on_frontpanel
+gosub All_leds_on
+T2CON.2=1       'start Timer2
+T4CON.2=1       'start Timer4
+LED_STATUS_RED=LED_OFF
+LED_STATUS_RED_BLINK=BLINK_OFF
+LED_STATUS_GREEN=LED_OFF
+'LED_CANBUS_RED=LED_ON
+'LED_CANBUS_RED_BLINK=BLINK_ON
+LED_CANBUS_RED=LED_OFF
+LED_CANBUS_GREEN=LED_OFF
+LED_CANCOM=LED_OFF
+LED_CANCOM_BLINK=BLINK_OFF 
+print_error=YES
+CLEARWDT        
+
+'gosub send_can_message
+gosub Print_serial_number
+hserout2 ["Startup done F",dec version,".",dec firmware,".",dec built," ID (",Mod_NE,"): ",Mod_ID0,".",dec Mod_ID1,".",dec Mod_ID2,".",dec Mod_ID3,13,10,"------------------------------------",13,10]  
+
+'----------------------------------------------------------------------------
+' Main routine
+'----------------------------------------------------------------------------
+
+mainloop:
+    CLEARWDT                        'Clear Watchdog timer
+    gosub Task_interprete_rx_rs485  'Check information coming from the RS485 bus
+    gosub Check_SerialErrors        'Check if serial errors happened
+    gosub check_inputs              'During initialization, init button needs to be checked
+    CLEARWDT                        'Clear Watchdog timer
+    gosub Task_blink_leds           'Ckeck if any of the leds that are ON needs to blink
+    Gosub Task_toggle_can_power     'Check if button_action is pressed long enough to toggle the power
+    gosub Task_update_leds          'Check if something needs to be written to the leds
+    CLEARWDT                        'Clear Watchdog timer
+    gosub Task_read_input           'If the interrupt pin of TCA9539 goes low, read this chip
+    gosub check_can_error           'Check if any errors on CAN that need rectifying
+    gosub send_can_dali_message
+    gosub Check_module_health
+Goto mainloop
+
+'--------------------------------------------------------------------------
+' Interrupt routines
+'--------------------------------------------------------------------------
+
+Receive1:                  'RS485 receive routine
+    recsertemp1=recsertemp2  'Keep previous character also
+    recsertemp2=RCREG1
+    if recser1==YES then        'Receiving?
+        A_StackSer1[PointerSer1]=recsertemp2
+        pointerser1=pointerser1+1
+        'ReceiveTemp=pointerser1-1
+        if recsertemp1==13 and recsertemp2==10 then
+            RCSTA1.4=0           'disable receiving serial 1
+            RecSer1=NO           'stop receiving ser1 and buffering
+            InterpreteSer1=1
+        else
+            if pointerser1>(BUFFER_UART_RX-2) then  'Buffer overflow -> stop receiving and interprete
+                RCSTA1.4=0           'disable receiving serial 1
+                RecSer1=NO           'stop receiving ser1 and buffering
+                InterpreteSer1=1
+            endif
+        endif      
+    else                     'Not in receiving mode
+        if recsertemp1=="S" and recsertemp2=="T" then
+            Pointerser1=0
+            recser1=YES        'start receiving ser1
+        endif
+    endif
+    RCSTA1.4=1  'enable UART1 receiver
+@ INT_RETURN
+
+Receive2:
+    'RCSTA2.4=0  'disable UART1 receiver
+    rec=RCREG2
+    TXREG2=rec
+    RCSTA2.4=1  'enable UART1 receiver
+@ INT_RETURN
+
+Timer0:    'interrupt after 26ms when i2c is active
+    T0CON.7=0  'timer 0 disabled
+    INTCON.2=0 'interrupt flag cleared
+    i2cerror=i2cerror+1
+    if print_error==YES then hserout2 [13,10,"Error I2C ",dec current_i2c_state_machine," ",dec Fase," ",dec A_state_machine_phase[READINPUT]," ",dec A_state_machine_phase[UPDATELEDS],13,10]
+    i2cmode=0  'stop
+    err=1      'error
+    i2cBusy=0
+    A_state_machine_phase[UPDATELEDS]=START
+    A_state_machine_phase[READINPUT]=START
+    A_state_machine_phase[BLOCKINGI2C]=START   
+@ INT_RETURN
+
+Timer2:   'interrupt every 204us  
+    T2CON.2=0  'stop timer2
+    PIR1.1=0   'clear timer2 interrupt flag
+    i2cNextStep=1
+    blink_counter=blink_counter+1
+    if i2cWaitTime>0 then i2cWaitTime=i2cWaitTime-1
+    'if Rs485CommunicationCounter<65535 then Rs485CommunicationCounter=Rs485CommunicationCounter+1
+    T2CON.2=1      'start timer2
+@ INT_RETURN
+
+Timer4:   'interrupt every 1,6ms  
+    T4CON.2=0  'stop timer4
+    PIR4.7=0   'clear timer4 interrupt flag
+    Rs485CommunicationCounter=Rs485CommunicationCounter+1
+    'if Rs485CommunicationCounter>152 then
+    '    Rs485CommunicationCounter=0
+    '    hserout2 ["ping",13,10]
+    'endif
+    T4CON.2=1      'start timer4
+@ INT_RETURN
+
+SSP:
+    PIE1.3=0   'disable interrupt
+    i2cMode=i2cMode+1
+    PIR1.3=0   'clear interrupt flag
+    PIE1.3=1   'enable interrupt  
+@ INT_RETURN
+
+RecCAN0:
+    CANCON.3=1  'Receive Buffer 0
+    CANCON.2=1
+    CANCON.1=1 
+    hserout2 ["Int CAN0 ",bin8 CANSTAT," ",bin8 CANCON,13,10]    
+    RXB0CON.7=0  'buffer is clear again
+    PIR5.0=0     'RXB0IF reset interrupt flag
+@ INT_RETURN
+
+RecCAN1:
+    'hserout2 ["Int CAN2 ",bin8 CANSTAT," ",bin8 CANCON," ",BIN8 RXB0CON," ",bin8 RXB1CON," COMSTAT=",bin8 COMSTAT," PIR5=",bin8 PIR5," PIE5=",bin8 PIE5," IPR5=",bin8 IPR5,13,10]
+    interruptVar=CANCON&%00001111
+    if InterruptVar=0 then           'Something in receive buffer 0
+        gosub RXB_Read_Buffer0
+    elseif InterruptVar=1 then       'Something in receive buffer 1
+        gosub RXB_Read_Buffer1
+    endif   
+@ INT_RETURN
+
+
+RXB_Read_Buffer0:
+    if RXB0DLC>0 then
+        if Can_message_sent==YES then   'A message has just been sent
+            Can_message_sent=NO
+            last_can_received[0]=RXB0D0
+            last_can_received[1]=RXB0D1
+            last_can_received[2]=RXB0D2
+            last_can_received[3]=RXB0D3
+            last_can_received[4]=RXB0D4
+            last_can_received[5]=RXB0D5
+            last_can_received[6]=RXB0D6
+            last_can_received[7]=RXB0D7
+            Can_message_double=YES      'reset variable before doing the test
+            for Can_message_check=1 to RXB0DLC
+                if last_can_received[Can_message_check-1]!=last_can_sent[Can_message_check-1] then
+                    Can_message_double=NO       'difference found so no double
+                    Can_message_check=RXB0DLC   'exit
+                endif
+            next Can_message_check
+        else                            'No double message
+            Can_message_double=NO 
+        endif            
+        if Can_message_double==NO then
+            if tx_end_pointer>=MAXRS485TXQUEUE then tx_end_pointer=0
+            A_Queue_tx_instr_type[tx_end_pointer]=CAN_MESSAGE
+            A_Queue_tx_length[tx_end_pointer]=RXB0DLC
+            A_Queue_tx_D0[tx_end_pointer]=RXB0D0
+            A_Queue_tx_D1[tx_end_pointer]=RXB0D1
+            A_Queue_tx_D2[tx_end_pointer]=RXB0D2
+            A_Queue_tx_D3[tx_end_pointer]=RXB0D3
+            A_Queue_tx_D4[tx_end_pointer]=RXB0D4
+            A_Queue_tx_D5[tx_end_pointer]=RXB0D5
+            A_Queue_tx_D6[tx_end_pointer]=RXB0D6
+            A_Queue_tx_D7[tx_end_pointer]=RXB0D7
+            A_Queue_tx_SIDH[tx_end_pointer]=RXB0SIDH
+            A_Queue_tx_SIDL[tx_end_pointer]=RXB0SIDL
+            'hserout2 ["RX CAN BUFFER 0: ",dec A_Queue_tx_D0[tx_end_pointer]," ",dec A_Queue_tx_D1[tx_end_pointer]," ",dec A_Queue_tx_D2[tx_end_pointer]," ",dec A_Queue_tx_D3[tx_end_pointer],13,10]  
+            gosub Add_RS485_Tx_queue
+        endif      
+    endif    
+    RXB0CON.7=0
+    PIR5.0=0
+return
+
+RXB_Read_Buffer1:
+    if RXB1DLC>0 then
+        if Can_message_sent==YES then   'A message has just been sent
+            Can_message_sent=NO
+            last_can_received[0]=RXB1D0
+            last_can_received[1]=RXB1D1
+            last_can_received[2]=RXB1D2
+            last_can_received[3]=RXB1D3
+            last_can_received[4]=RXB1D4
+            last_can_received[5]=RXB1D5
+            last_can_received[6]=RXB1D6
+            last_can_received[7]=RXB1D7
+            Can_message_double=YES      'reset variable before doing the test
+            for Can_message_check=1 to RXB1DLC
+                if last_can_received[Can_message_check-1]!=last_can_sent[Can_message_check-1] then
+                    Can_message_double=NO       'difference found so no double
+                    Can_message_check=RXB1DLC   'exit
+                endif
+            next Can_message_check
+        else                            'No double message
+            Can_message_double=NO 
+        endif            
+        if Can_message_double==NO then
+            if tx_end_pointer>=MAXRS485TXQUEUE then tx_end_pointer=0
+            A_Queue_tx_instr_type[tx_end_pointer]=CAN_MESSAGE
+            A_Queue_tx_length[tx_end_pointer]=RXB1DLC
+            A_Queue_tx_D0[tx_end_pointer]=RXB1D0
+            A_Queue_tx_D1[tx_end_pointer]=RXB1D1
+            A_Queue_tx_D2[tx_end_pointer]=RXB1D2
+            A_Queue_tx_D3[tx_end_pointer]=RXB1D3
+            A_Queue_tx_D4[tx_end_pointer]=RXB1D4
+            A_Queue_tx_D5[tx_end_pointer]=RXB1D5
+            A_Queue_tx_D6[tx_end_pointer]=RXB1D6
+            A_Queue_tx_D7[tx_end_pointer]=RXB1D7
+            A_Queue_tx_SIDH[tx_end_pointer]=RXB1SIDH
+            A_Queue_tx_SIDL[tx_end_pointer]=RXB1SIDL
+            'hserout2 ["RX CAN BUFFER 0: ",dec A_Queue_tx_D0[tx_end_pointer]," ",dec A_Queue_tx_D1[tx_end_pointer]," ",dec A_Queue_tx_D2[tx_end_pointer]," ",dec A_Queue_tx_D3[tx_end_pointer],13,10]  
+            gosub Add_RS485_Tx_queue
+        endif 
+    endif    
+    RXB1CON.7=0
+    PIR5.1=0     
+return
+
+;---------------------------------------------------------------------------
+; Subroutines - Tasks (State machines)
+;---------------------------------------------------------------------------
+
+Task_interprete_rx_rs485:   'Interprete data coming from the RS485 bus
+    if A_state_machine_phase[READRS485]==START then
+        if InterpreteSer1==YES then                         'Message is read to be interpreted
+            InterpreteSer1=NO
+            if A_StackSer1[0]="C" and A_StackSer1[1]==Mod_id1 and A_StackSer1[2]==Mod_id2 and A_StackSer1[3]==Mod_id3 then  'CAN module addressed
+                Rs485CommunicationCounter=0
+                RS485_message_type=CANCONTROLMESSAGE
+                gosub Check_can_message
+                A_state_machine_phase[READRS485]=A_state_machine_phase[READRS485]+1
+            elseif A_StackSer1[0]==0 and A_StackSer1[1]==0 and A_StackSer1[2]==0 and A_StackSer1[3]==0 then                 'Broadcast message
+                Rs485CommunicationCounter=0
+                RS485_message_type=BROADCASTMESSAGE
+                gosub Check_broadcast_message
+                A_state_machine_phase[READRS485]=A_state_machine_phase[READRS485]+1
+            elseif mode=="I" and A_StackSer1[0]=="A" and A_StackSer1[1]=="D" then                                           'activate device
+                Rs485CommunicationCounter=0
+                RS485_message_type=ACTIVATEDEVICEMESSAGE
+                gosub activate_device
+                A_state_machine_phase[READRS485]=A_state_machine_phase[READRS485]+1
+            endif
+        endif  
+    elseif A_state_machine_phase[READRS485]==STEP1 then     'RS485 feedback
+        if RS485_message_type==CANCONTROLMESSAGE then
+            A_state_machine_phase[READRS485]=A_state_machine_phase[READRS485]+1
+        elseif RS485_message_type==BROADCASTMESSAGE then
+            A_state_machine_phase[READRS485]=A_state_machine_phase[READRS485]+1
+        elseif RS485_message_type==ACTIVATEDEVICEMESSAGE then
+            A_state_machine_phase[READRS485]=A_state_machine_phase[READRS485]+1
+        else
+            A_state_machine_phase[READRS485]=A_state_machine_phase[READRS485]+1
+        endif    
+    elseif A_state_machine_phase[READRS485]==STEP2 then     'state machine can be released
+        A_state_machine_phase[READRS485]=START
+        RCSTA1.4=1                                          'enable receiving serial 1
+        InterpreteSer1=NO
+    else
+        A_state_machine_phase[READRS485]=START
+        RCSTA1.4=1                                          'enable receiving serial 1
+        InterpreteSer1=NO
+    endif
+return
+
+Check_can_message:
+    if A_StackSer1[4]<48 then   'All ascii instructions lower then 48 (0-47) are seen as instructions with variable length
+        'hier search module
+        startup_master=NO
+        LED_STATUS_RED=LED_OFF
+        LED_STATUS_GREEN=LED_ON
+        LED_STATUS_RED_BLINK=BLINK_OFF
+        LED_STATUS_GREEN_BLINK=BLINK_OFF                     
+        crc_begin=0
+        crc_end=A_StackSer1[5]+5    'length + 5
+        gosub Check_RS485_CRC
+        if crc_ok==YES then
+            gosub Check_variable_length_instruction                                                  
+        endif            
+    elseif A_StackSer1[4]=="F" and A_StackSer1[5]=="V" then     'Request Firmware Version
+        s1="V"
+        gosub send_F_response
+    elseif A_stackser1[4]="F" and A_stackser1[5]="L" then       'Request Firmware Version and Serial number
+        s1="L"
+        gosub send_F_response         
+    elseif A_StackSer1[4]=="F" and A_StackSer1[5]=="R" then     'Perform Reset of the module
+        write 75,A_StackSer1[6]                                 'Write number of seconds that this module must remain in bootloader mode
+        s1="R"
+        gosub send_F_response
+        asm
+            reset
+        endasm  
+    endif  
+return
+
+Check_module_health:
+    if Rs485CommunicationCounter>4580 then     'If no RS485 communication happens after 30 seconds, reset CAN Control
+        Rs485CommunicationCounter=0
+        if mode=="L" and Mod_NE=="E" then
+            asm
+                reset
+            endasm       
+        endif
+    endif
+return
+
+set_can_status_led:
+    'Health_status.BIT1=1: At least 1 Micro CAN is responding
+    'Health_status.BIT0=1: At least 1 Micro CAN is NOT responding
+    if CAN_POWER_OUT==1 then    'CAN power is ON
+        if health_status.bit1=0 and health_status.bit0=1 then       'All Micro CAN's are not responding, led red on
+            LED_CANBUS_RED=LED_ON
+            LED_CANBUS_GREEN=LED_OFF
+            LED_CANBUS_GREEN_BLINK=BLINK_OFF
+            LED_CANBUS_RED_BLINK=BLINK_OFF    
+        elseif health_status.bit1=1 and health_status.bit0=0 then   'All Micro CAN's are responding, led green on
+            LED_CANBUS_RED=LED_OFF
+            LED_CANBUS_GREEN=LED_ON
+            LED_CANBUS_GREEN_BLINK=BLINK_OFF
+            LED_CANBUS_RED_BLINK=BLINK_OFF    
+        elseif health_status.bit1=1 and health_status.bit0=1 then   'Some are responding, some not, led red blinking
+            LED_CANBUS_RED=LED_ON
+            LED_CANBUS_GREEN=LED_OFF
+            LED_CANBUS_GREEN_BLINK=BLINK_OFF
+            LED_CANBUS_RED_BLINK=BLINK_ON    
+        else                                                        'Nothing configured, led green blinking
+            LED_CANBUS_RED=LED_OFF
+            LED_CANBUS_GREEN=LED_ON
+            LED_CANBUS_GREEN_BLINK=BLINK_ON
+            LED_CANBUS_RED_BLINK=BLINK_OFF    
+        endif
+    endif
+return
+
+Check_variable_length_instruction:
+    if A_StackSer1[4]==EMPTY_MESSAGE then       'Nothing to report to CAN Control and request if something is in the queue
+        health_status=A_StackSer1[7]
+        gosub set_can_status_led
+        gosub Send_rs485_message
+        'hserout2 ["Answer Nothing to report",13,10]
+    elseif A_StackSer1[4]==CAN_MESSAGE and A_StackSer1[5]>4 then     'CAN message received from RS485 to be put on the CAN bus
+        if rx_end_pointer>=MAXRS485RXQUEUE then rx_end_pointer=0
+        A_Queue_rx_instr_type[rx_end_pointer]=CAN_MESSAGE
+        A_Queue_rx_length[rx_end_pointer]=A_StackSer1[5]-3
+        A_Queue_rx_SIDH[rx_end_pointer]=A_StackSer1[7]
+        A_Queue_rx_SIDL[rx_end_pointer]=A_StackSer1[8]        
+        A_Queue_rx_D0[rx_end_pointer]=A_StackSer1[9]
+        A_Queue_rx_D1[rx_end_pointer]=A_StackSer1[10]
+        A_Queue_rx_D2[rx_end_pointer]=A_StackSer1[11]
+        A_Queue_rx_D3[rx_end_pointer]=A_StackSer1[12]
+        A_Queue_rx_D4[rx_end_pointer]=A_StackSer1[13]
+        A_Queue_rx_D5[rx_end_pointer]=A_StackSer1[14]
+        A_Queue_rx_D6[rx_end_pointer]=A_StackSer1[15]
+        A_Queue_rx_D7[rx_end_pointer]=A_StackSer1[16]
+        'hserout2 ["RX from RS485, add to CAN Queue L=",dec A_Queue_rx_length[rx_end_pointer]," D: ",dec A_Queue_rx_D0[rx_end_pointer]," ",dec A_Queue_rx_D1[rx_end_pointer]," ",dec A_Queue_rx_D2[rx_end_pointer]," ",dec A_Queue_rx_D3[rx_end_pointer]," ",dec A_Queue_rx_D4[rx_end_pointer]," ",dec A_Queue_rx_D5[rx_end_pointer],13,10]               
+        gosub Add_RS485_Rx_queue 
+        gosub Send_rs485_message
+    elseif A_StackSer1[4]==DALI_MESSAGE then    'DALI message received
+        gosub Send_rs485_message
+    endif            
+return
+
+Send_rs485_message:
+    if tx_queue_size==0 then                'Nothing to report to Master
+        LED_CANCOM=LED_OFF
+        LED_CANCOM_BLINK=BLINK_OFF
+        gosub Send_rs485_message_empty_queue
+    else                                    'Something in the queue so report back to Master
+        LED_CANCOM=LED_ON
+        LED_CANCOM_BLINK=BLINK_OFF        
+        gosub Send_rs485_messages_from_tx_queue
+    endif
+return
+
+Send_rs485_message_empty_queue:
+    rs485_instr_type=EMPTY_MESSAGE
+    rs485_length=2                          'includes rs485_additional_data and A_rs485_data
+    rs485_additional_data=0                 'Nothing in the queue                       
+    gosub send_rs485_response               
+return
+
+Send_rs485_messages_from_tx_queue:
+    temp_queue_size=tx_queue_size
+    'hserout2 ["----Queue Size ",dec tx_queue_size,13,10]
+    for QueueCheck=1 to temp_queue_size
+        rs485_instr_type=A_Queue_tx_instr_type[tx_start_pointer]
+        rs485_length=A_Queue_tx_length[tx_start_pointer]+3     'includes rs485_additional_data and A_rs485_data
+        A_rs485_data[0]=A_Queue_tx_D0[tx_start_pointer]
+        A_rs485_data[1]=A_Queue_tx_D1[tx_start_pointer]
+        A_rs485_data[2]=A_Queue_tx_D2[tx_start_pointer]
+        A_rs485_data[3]=A_Queue_tx_D3[tx_start_pointer]
+        A_rs485_data[4]=A_Queue_tx_D4[tx_start_pointer]
+        A_rs485_data[5]=A_Queue_tx_D5[tx_start_pointer]
+        A_rs485_data[6]=A_Queue_tx_D6[tx_start_pointer]
+        A_rs485_data[7]=A_Queue_tx_D7[tx_start_pointer]
+        rs485_sidh=A_Queue_tx_SIDH[tx_start_pointer]
+        rs485_sidl=A_Queue_tx_SIDL[tx_start_pointer]
+        gosub Rem_RS485_Tx_queue
+        rs485_additional_data=tx_queue_size  'additional message after this message            
+        if QueueCheck>=MAX_RS485_MESSAGES then           'Only send x messages due to the receiving buffer size of the Master    
+            QueueCheck=temp_queue_size
+            rs485_additional_data=0          'No other messages will follow at this moment, rest will be sent in the next communication flow
+        endif
+        gosub send_rs485_response     
+    next QueueCheck
+return
+
+Check_RS485_CRC:
+    crc=0
+    for i=crc_begin to crc_end
+        crc=crc+A_StackSer1[i]
+    next i
+    if A_StackSer1[crc_end+1]=="C" and A_StackSer1[crc_end+2]=crc.byte1 and A_StackSer1[crc_end+3]=crc.byte0 then
+        crc_ok=YES
+        'hserout2 ["Correct CRC (",dec A_StackSer1[crc_end+1],") ",dec A_StackSer1[crc_end+2],"=",dec CRC.byte1," ",dec A_StackSer1[crc_end+3],"=",dec CRC.byte0,13,10]
+    else
+        crc_ok=NO
+        hserout2 ["Wrong CRC (",dec A_StackSer1[crc_end+1],") ",dec A_StackSer1[crc_end+2],"=",dec CRC.byte1," ",dec A_StackSer1[crc_end+3],"=",dec CRC.byte0,13,10]
+    endif
+return
+
+send_Nx_response:
+    'hserout2 ["Nx message received",13,10]
+    pauseus 1500
+    high RS485_DIR 'send mode
+    hserout ["RC",Mod_id0,Mod_id1,Mod_id2,Mod_id3,"N","R",13,10]
+    Gosub Low_rs485_mode  
+return
+
+
+send_rs485_response:
+    'hserout2 ["----Prepare Message ",dec rs485_length,13,10]
+    if rs485_length>0 and rs485_length<=MAXRS485LENGTH then
+        crc=Mod_id0+Mod_id1+Mod_id2+Mod_id3+rs485_instr_type+rs485_length+rs485_additional_data
+        'hserout2 ["CRC temp=",dec crc," ",dec crc.byte1," ",dec crc.byte0,13,10]   
+        pauseus 1500
+        high RS485_DIR 'send mode
+        'hserout2 ["RC ",dec Mod_id0," ",dec Mod_id1," ",dec Mod_id2," ",dec Mod_id3," ",dec rs485_instr_type," ",dec rs485_length," ",dec rs485_additional_data," "]
+        hserout ["RC",Mod_id0,Mod_id1,Mod_id2,Mod_id3,rs485_instr_type,rs485_length,rs485_additional_data]
+        if rs485_instr_type==CAN_MESSAGE then
+            if rs485_length>2 then
+                crc=crc+rs485_sidh+rs485_sidl
+                hserout [rs485_sidh,rs485_sidl]
+                for i=0 to (rs485_length-4)
+                    crc=crc+A_rs485_data[i]
+                    'hserout2 [dec A_rs485_data[i]," "]
+                    hserout [A_rs485_data[i]]
+                next i
+            endif
+        elseif rs485_instr_type==EMPTY_MESSAGE then
+            if rs485_length==2 then
+                crc=crc+CAN_POWER_OUT
+                hserout [CAN_POWER_OUT]
+            endif
+        elseif rs485_instr_type==DALI_MESSAGE then
+            if rs485_length==6 then     'Always 5 bytes + queue_size
+                for i=0 to 4
+                    crc=crc+A_rs485_data[i]
+                    'hserout2 [dec A_rs485_data[i]," "]
+                    hserout [A_rs485_data[i]]
+                next i
+            endif        
+        endif        
+        hserout ["C",crc.byte1,crc.byte0,13,10]
+        'hserout2 ["C ",dec crc.byte1," ",dec crc.byte0,13,10]
+        Gosub Low_rs485_mode
+        'hserout2 ["Message being sent CRC=",dec crc," ",dec crc.byte1," ",dec crc.byte0,13,10] 
+    endif    
+return
+
+Task_blink_leds:                                                'Check if led must be ON, OFF or blinking
+    temp_result=led_data & led_data_blink & blink_invert        'Calculate leds that must be ON when blink function is activated
+    temp_result=temp_result | (led_data & (~led_data_blink))    'Calculate leds that must be ON when blink function is not activated
+    tca9539_data=~temp_result                                   'Invert result to sent to chip
+    if blink_counter>1200 then                                  'Toggle blink function
+        blink_counter=0
+        blink_invert=~blink_invert
+        if Can_power_wait_active==YES then
+            Can_power_wait_counter=Can_power_wait_counter+1        
+        endif
+    endif    
+return
+
+Task_toggle_can_power:
+    if Can_power_wait_active==YES then
+        if Can_power_wait_counter>5 then
+            Can_power_wait_active=NO
+            Can_power_wait_counter=0
+            if CAN_POWER_OUT==1 then    'CAN Power is ON
+                gosub Can_power_off
+            else
+                gosub Can_power_on
+            endif
+        endif
+    endif
+return
+
+Can_power_on:
+    hserout2 ["CAN Power ON",13,10]
+    LED_CANBUS_RED=LED_OFF
+    LED_CANBUS_GREEN=LED_ON    
+    CAN_POWER_OUT=1
+return
+
+Can_power_off:
+    hserout2 ["CAN Power OFF",13,10]
+    LED_CANBUS_RED=LED_OFF
+    LED_CANBUS_GREEN=LED_OFF    
+    CAN_POWER_OUT=0
+return
+
+Task_update_leds:
+    if A_state_machine_phase[UPDATELEDS]==START then
+        if tca9539_data_old<>tca9539_data and TCA9539_FOUND==YES then
+            if i2cBusy==NO then                          'i2c is not busy so bus can be taken
+                i2ccont=TCA9539_0_ADDRESS
+                i2cCommandCode=2                        '2 and 3 are the output port registers
+                i2cCommandData=tca9539_data.byte0       'for output 0-7
+                i2cCommandData1=tca9539_data.byte1      'for output 8-15
+                'hserout2 ["Write NB ",bin8 i2cCommandData1," ",bin8 i2cCommandData,13,10]
+                gosub Set_parameters_I2C_write_tca9539
+                gosub I2C_Non_Blocking_prepare
+                current_i2c_state_machine=UPDATELEDS
+                A_state_machine_phase[UPDATELEDS]=A_state_machine_phase[UPDATELEDS]+1            
+            endif
+        endif
+    elseif A_state_machine_phase[UPDATELEDS]==STEP1 then   'Read i2c
+        gosub I2C_Non_Blocking                          'state machine will be automatically increased after i2c is done
+        'hserout2 ["X"]                          
+    elseif A_state_machine_phase[UPDATELEDS]==STEP2 then   'state machine can be released
+        A_state_machine_phase[UPDATELEDS]=START
+        tca9539_data_old=tca9539_data
+        'hserout2 [" Done",13,10]
+    else
+        A_state_machine_phase[UPDATELEDS]=START
+    endif
+return
+
+Task_read_input:
+    if A_state_machine_phase[READINPUT]==START then
+        if INTERRUPT_PIN==0 then     'one of the button's is pressed so start reading
+            if TCA9539_FOUND==YES then
+                if i2cBusy==NO then                          'i2c is not busy so bus can be taken
+                    i2ccont=TCA9539_0_ADDRESS
+                    i2cCommandCode=0              '0 and 1 are the input port registers
+                    gosub Set_parameters_I2C_read_tca9539
+                    gosub I2C_Non_Blocking_prepare
+                    current_i2c_state_machine=READINPUT
+                    A_state_machine_phase[READINPUT]=A_state_machine_phase[READINPUT]+1
+                    'gosub I2C_Blocking
+                    'hserout2 ["I2C input data(0) ",bin8 A_i2cdata[1]," ",bin8 A_i2cdata[0]," Adrr: ",bin8 i2ccont,13,10]
+                endif                    
+            else                    'No chip is found so try to initialize the chip
+                gosub check_tca9539     'check chip config
+            endif
+        endif
+    elseif A_state_machine_phase[READINPUT]==STEP1 then        
+        gosub I2C_Non_Blocking                          'state machine will be automatically increased after i2c is done
+        'hserout2 ["Y"]         
+    elseif A_state_machine_phase[READINPUT]==STEP2 then
+        A_state_machine_phase[READINPUT]=START
+        'hserout2 ["I2C input data(0) ",bin8 A_i2cdata[1]," ",bin8 A_i2cdata[0]," Adrr: ",bin8 i2ccont,13,10]
+        x=A_i2cdata[1]
+        Action_button=~x.bit6
+        Power_button=~x.bit7
+        'hserout2 ["Button1=",dec Action_button," Button2=",dec Power_button,13,10]
+    else
+        A_state_machine_phase[READINPUT]=START
+    endif
+return
+
+'---------------------------------------------------------------------------
+' Subroutines queues
+'---------------------------------------------------------------------------
+
+Print_serial_number:
+    hserout2 ["SN: "]
+    if serial_number==65535 and Serial_errors==255 then
+        hserout2 ["-",13,10]
+    else
+        hserout2 [dec2 Serial_year,dec2 Serial_month,dec2 Serial_day,dec1 Serial_prod_company,dec5 serial_number,"(",dec Serial_errors,")",13,10]
+    endif
+return
+
+send_can_dali_message:          'Check if something is received from Master over RS485 that needs to be forwarded to CAN or DALI bus
+    if rx_queue_size>0 then     'Something in the queue
+        if A_Queue_rx_instr_type[rx_start_pointer]==CAN_MESSAGE then
+            if TXB0CON.3==0 then    'Transmit queue is ready to receive new messages
+                'LED_CANCOM=LED_ON
+                'LED_CANCOM_BLINK=BLINK_OFF
+                TXB0SIDH=A_Queue_rx_SIDH[rx_start_pointer]
+                TXB0SIDL=A_Queue_rx_SIDL[rx_start_pointer]
+                TXB0DLC=A_Queue_rx_length[rx_start_pointer]          'sent x bytes
+                TXB0D0=A_Queue_rx_D0[rx_start_pointer]
+                TXB0D1=A_Queue_rx_D1[rx_start_pointer]
+                TXB0D2=A_Queue_rx_D2[rx_start_pointer]
+                TXB0D3=A_Queue_rx_D3[rx_start_pointer]
+                TXB0D4=A_Queue_rx_D4[rx_start_pointer]
+                TXB0D5=A_Queue_rx_D5[rx_start_pointer]
+                TXB0D6=A_Queue_rx_D6[rx_start_pointer]
+                TXB0D7=A_Queue_rx_D7[rx_start_pointer]
+                last_can_sent[0]=A_Queue_rx_D0[rx_start_pointer]
+                last_can_sent[1]=A_Queue_rx_D1[rx_start_pointer]
+                last_can_sent[2]=A_Queue_rx_D2[rx_start_pointer]
+                last_can_sent[3]=A_Queue_rx_D3[rx_start_pointer]
+                last_can_sent[4]=A_Queue_rx_D4[rx_start_pointer]
+                last_can_sent[5]=A_Queue_rx_D5[rx_start_pointer]
+                last_can_sent[6]=A_Queue_rx_D6[rx_start_pointer]
+                last_can_sent[7]=A_Queue_rx_D7[rx_start_pointer]         
+                TXB0CON.3=1    'Request sending message
+                Can_message_sent=YES
+                'hserout2 ["Send CAN message ",dec A_Queue_rx_D0[rx_start_pointer]," ",dec A_Queue_rx_D1[rx_start_pointer]," ",dec A_Queue_rx_D2[rx_start_pointer]," ",dec A_Queue_rx_D3[rx_start_pointer],13,10]
+                gosub Rem_RS485_Rx_queue
+            endif      
+        elseif A_Queue_rx_instr_type[rx_start_pointer]==DALI_MESSAGE then 
+            'hserout2 ["To be Send DALI message ",13,10]
+            gosub Rem_RS485_Rx_queue 
+        else
+            hserout2 ["UNKNOWN message ",dec A_Queue_rx_instr_type[rx_start_pointer]," Data= ",dec A_Queue_rx_D0[rx_start_pointer]," ",dec A_Queue_rx_D1[rx_start_pointer]," ",dec A_Queue_rx_D2[rx_start_pointer]," ",dec A_Queue_rx_D3[rx_start_pointer],13,10]
+            gosub Rem_RS485_Rx_queue    
+        endif              
+    'else
+    '    LED_CANCOM=LED_OFF
+    '    LED_CANCOM_BLINK=BLINK_OFF
+    endif    
+return
+
+check_can_error:
+    if COMSTAT>0 then
+        if COMSTAT.BIT7=1 then            'FIFO is not empty
+            hserout2 ["Mode2: FIFO is not empty",13,10]
+            'code here to read FIFO
+            if RXB0CON.7=1 then gosub RXB_Read_Buffer0   'Buffer0 is full and interrupt missed?
+            if RXB1CON.7=1 then gosub RXB_Read_Buffer1   'Buffer0 is full and interrupt missed? 
+            COMSTAT.BIT7=0      
+        endif
+        if COMSTAT.BIT6=1 then            'Receive Buffer overflow
+            hserout2 ["Receive Buffer Overflow",13,10]
+            'code here to read and empty FIFO
+            if RXB0CON.7=1 then gosub RXB_Read_Buffer0   'Buffer0 is full and interrupt missed?
+            if RXB1CON.7=1 then gosub RXB_Read_Buffer1   'Buffer0 is full and interrupt missed? 
+            COMSTAT.BIT6=0
+            can_errors=can_errors+1
+            if can_errors>500 then
+                CAN_POWER_OUT=0
+                pause 2000
+                asm
+                    reset
+                endasm   
+            endif       
+        endif
+        'if COMSTAT.BIT5=1 then              'CAN bus is in OFF State
+        '    asm
+        '        reset
+        '    endasm
+        'endif         
+    endif   
+Return
+
+init_CAN:
+  'CAN BUS----------------------
+  INTCON.6=0
+  INTCON.7=0  'disable all interrupts   
+  PIE5.0=0    'disable CAN receive buffer 0 interrupt
+  PIE5.1=0    'disable CAN receive buffer 1 interrupt
+  CanError=0
+  CANCON.7=1      'Request Config mode
+  do until (CANSTAT.7=1 and CANSTAT.6=0 and CANSTAT.5=0) 'Wait until config mode is active
+  loop
+    
+  'BRGCON1=%10001001         'Sync Jump=3xTq, Tq=(2x10)/40Mhz=0,5us   
+  'BRGCON2=%10111000         'Ph Seg1=8xTq,Prop Time=1xTq
+  'BRGCON3=%00000101         'Ph Seg2=6xTq
+  
+  BRGCON1=%01001001         'SJW=2xTq, BRP=9->Tq=(2x(9+1))/40Mhz=0,5us   
+  BRGCON2=%11100111         'Ph Seg1=5xTq, Prop Time=8xTq
+  BRGCON3=%00000001         'Ph Seg2=2xTq    
+  
+  ECANCON=%10000000         'Mode 2
+  RXB0CON=%01000000         'Receive all message, including those with errors, ignore acceptance filters
+  RXB1CON=%01000000         'Receive all message, including those with errors, ignore acceptance filters         
+  CIOCON.5=1
+  CIOCON.4=0  
+  RXM0SIDL=%00000000        'Mask 0
+  RXM0SIDH=%00000000
+  RXM1SIDL=%00000000        'Mask 1
+  RXM1SIDH=%00000000    
+  RXF0SIDL=%00000000        'Filter 0, not used for the moment since Mask has been set to 0
+  RXF0SIDH=%00000000
+  RXF2SIDL=%00000000        'Filter 2, not used for the moment since Mask has been set to 0
+  RXF2SIDH=%00000000    
+  CANCON.7=0                'Normal Mode
+  CANCON.6=0
+  CANCON.5=0 
+  do until (CANSTAT.7=0 and CANSTAT.6=0 and CANSTAT.5=0)  'Wait until normal mode is active
+  loop
+  BSEL0=%11111100           'Set B registers in sending mode, only used in mode 2 (and we won't use them)
+  PIE5.7=0                  'disable invalid message reception interrupt
+  PIE5.6=0                  'disable bus activity wake-up interrupt
+  PIE5.5=0                  'disable CAN module error interrupt  
+  PIE5.1=1                  'enable CAN receive buffer 1 interrupt  
+  PIE5.1=1                'enable CAN receive buffer interrupts
+  PIE5.0=0                'disable FIFO watermark
+  PIE5.4=0                'disable all transmit buffer interrupts (in Mode2)
+  PIE5.4=0    'disable Transmit Buffer 2 interrupt
+  PIE5.3=0    'disable Transmit Buffer 1 interrupt
+  PIE5.2=0    'disable Transmit Buffer 0 interrupt
+  INTCON.6=1
+  INTCON.7=1  'enable all interrupts              
+Return
+
+Check_init_led:
+    if automatic_module_search==YES and mode=="I" and Mod_NE=="E" then 
+        LED_STATUS_RED=LED_OFF
+        LED_STATUS_GREEN=LED_ON
+        LED_STATUS_RED_BLINK=BLINK_OFF
+        LED_STATUS_GREEN_BLINK=BLINK_OFF    
+    endif
+return
+
+Check_broadcast_message:
+    if A_StackSer1[4]="L" and A_StackSer1[5]="L" then           'Bus in Live mode
+        if mode=="I" then
+        'hier search module
+            if startup_master==YES then                             'Put startup_master to NO when first direct message from Master to this module is received
+                if Mod_NE=="E" then
+                    LED_STATUS_RED=LED_ON
+                    LED_STATUS_GREEN=LED_OFF
+                    LED_STATUS_RED_BLINK=BLINK_OFF
+                    LED_STATUS_GREEN_BLINK=BLINK_OFF                
+                else
+                    LED_STATUS_RED=LED_OFF
+                    LED_STATUS_GREEN=LED_OFF
+                    LED_STATUS_RED_BLINK=BLINK_OFF
+                    LED_STATUS_GREEN_BLINK=BLINK_OFF
+                endif
+            else 
+                LED_STATUS_RED=LED_OFF
+                LED_STATUS_GREEN=LED_ON
+                LED_STATUS_RED_BLINK=BLINK_OFF
+                LED_STATUS_GREEN_BLINK=BLINK_OFF               
+            endif                              
+            hserout2 ["Live",13,10]
+        endif  
+        mode="L"
+        automatic_module_search=NO
+    elseif A_StackSer1[4]=="I" and A_StackSer1[5]=="I" then     'Bus in Initialize mode
+        gosub generate_id
+        if mode=="L" then 
+            LED_STATUS_RED=LED_ON
+            LED_STATUS_GREEN=LED_ON
+            LED_STATUS_RED_BLINK=BLINK_OFF
+            LED_STATUS_GREEN_BLINK=BLINK_OFF                     
+            hserout2 ["Init",13,10]
+        endif
+        mode="I"
+    elseif A_StackSer1[4]=="C" and A_StackSer1[5]=="P" then     'CAN Power
+        if A_StackSer1[6]=="R" then
+            if A_StackSer1[7]==0 then                           'CAN Power OFF
+                gosub Can_power_off
+            elseif A_StackSer1[7]==1 then                       'CAN Power ON
+                gosub Can_power_on
+            endif
+        endif        
+    'hier Search Module    
+    elseif A_StackSer1[4]=="S" and A_StackSer1[5]=="M" then     'Search Module
+        if A_StackSer1[15]=="C" then                            'CRC in message
+            rs485_length=15
+            automatic_module_search=YES
+            gosub check_init_led
+            gosub Check_CRC16_in_RS485_message
+            'hserout2 ["Search Module ",dec CRC.byte1," ",dec CRC.byte0," ",dec A_StackSer1[16]," ",dec A_StackSer1[17],13,10]
+            if CRC.byte1==A_StackSer1[16] and CRC.byte0==A_StackSer1[17] then   'CRC OK
+                selection_byte=A_StackSer1[14]
+                message_check[0]=Mod_id0
+                message_check[1]=Mod_id1
+                message_check[2]=Mod_id2
+                message_check[3]=Mod_id3
+                message_check[4]=Mod_NE
+                message_check[5]=0          'Not used
+                message_check[6]=0          'Not used
+                message_check[7]=0          'Not used
+                send_message=YES
+                for i=0 to 7
+                    t=selection_byte<<i
+                    if t.bit7==1 then
+                '        hserout2 ["Check Pos ",dec i," data ",dec message_check[i]," ",dec A_StackSer1[6+i],13,10]
+                        if message_check[i]!=A_StackSer1[6+i] then send_message=NO
+                    endif
+                next i
+                if send_message==YES then
+                    'hserout2 ["Message can be sent!",13,10]
+                    s1=0
+                    s2=Mod_NE               'E->existing,N->New
+                    gosub rs485_send
+                endif
+            endif
+        endif
+    'hier Search Module    
+    elseif A_StackSer1[4]=="S" and A_StackSer1[5]=="U" then     'Start Up broadcast
+        startup_master=YES                                      'Put startup_master to NO when first direct message from Master to this module is received
+        if Mod_NE=="E" then
+            LED_STATUS_RED=LED_ON
+            LED_STATUS_GREEN=LED_OFF
+            LED_STATUS_RED_BLINK=BLINK_OFF
+            LED_STATUS_GREEN_BLINK=BLINK_OFF        
+        else
+            LED_STATUS_RED=LED_OFF
+            LED_STATUS_GREEN=LED_OFF
+            LED_STATUS_RED_BLINK=BLINK_OFF
+            LED_STATUS_GREEN_BLINK=BLINK_OFF
+        endif
+        'hserout2 ["Startup Master Message received",13,10]         
+    'testmode 
+    elseif A_StackSer1[4]=="T" and A_StackSer1[5]=="M" then     'Instruction only requested in Test Mode
+        toggle LED_STATUS_RED
+        toggle LED_STATUS_GREEN
+        LED_STATUS_RED_BLINK=BLINK_OFF
+        LED_STATUS_GREEN_BLINK=BLINK_OFF                                 
+        Gosub Test_instructions
+    endif    
+return
+
+'---------------------------------------------------------------------------
+' Subroutines queues
+'---------------------------------------------------------------------------
+
+Add_RS485_Tx_queue:
+    'if tx_end_pointer>=MAXRS485TXQUEUE then tx_end_pointer=0    'Make sure tx_end_pointer is in a valid range before starting
+    if tx_queue_size<MAXRS485TXQUEUE then 
+        'hserout2 ["Add: Tx_start_pointer=",dec tx_start_pointer," Tx_end_pointer=",dec tx_end_pointer," D0=",dec A_Queue_tx_D0[tx_end_pointer]," D1=",dec A_Queue_tx_D1[tx_end_pointer]," Instr_type=",dec A_Queue_tx_instr_type[tx_end_pointer],13,10]   
+        tx_end_pointer=tx_end_pointer+1
+        if tx_end_pointer>=MAXRS485TXQUEUE then tx_end_pointer=0
+        tx_queue_size=tx_queue_size+1
+        'hserout2 ["Add Next: Tx_start_pointer=",dec tx_start_pointer," Tx_end_pointer=",dec tx_end_pointer," tx_queue_size=",dec tx_queue_size,13,10]
+    'else
+        'hserout2 ["TX BUFFER FULL: Tx_start_pointer=",dec tx_start_pointer," Tx_end_pointer=",dec tx_end_pointer," tx_queue_size=",dec tx_queue_size,13,10]
+    endif        
+return
+
+Rem_RS485_Tx_queue:
+    if tx_queue_size<=MAXRS485TXQUEUE and tx_queue_size>0 then    
+        'hserout2 ["Rem: Tx_start_pointer=",dec tx_start_pointer," Tx_end_pointer=",dec tx_end_pointer," SID=",dec A_Queue_tx_D0[tx_start_pointer]," CID=",dec A_Queue_tx_D1[tx_start_pointer]," Instr_type=",dec A_Queue_tx_instr_type[tx_start_pointer],13,10]
+        tx_start_pointer=tx_start_pointer+1
+        if tx_start_pointer>=MAXRS485TXQUEUE then tx_start_pointer=0
+        tx_queue_size=tx_queue_size-1
+        'hserout2 ["Rem Next: Tx_start_pointer=",dec tx_start_pointer," Tx_end_pointer=",dec tx_end_pointer," tx_queue_size=",dec tx_queue_size,13,10]
+    else
+        tx_queue_size=0
+        tx_start_pointer=tx_end_pointer
+        'hserout2 ["Nothing to remove: Tx_start_pointer=",dec tx_start_pointer," Tx_end_pointer=",dec tx_end_pointer," tx_queue_size=",dec tx_queue_size,13,10]
+    endif
+return
+
+Add_RS485_Rx_queue:
+    if rx_end_pointer>=MAXRS485RXQUEUE then rx_end_pointer=0    'Make sure rx_end_pointer is in a valid range before starting
+    if rx_queue_size<MAXRS485RXQUEUE then
+        'A_Queue_rx_instr_type[rx_end_pointer]=rs485_instr_type
+        'A_Queue_rx_D0[rx_end_pointer]=A_rs485_data[0]
+        'A_Queue_rx_D1[rx_end_pointer]=A_rs485_data[1]
+        'A_Queue_rx_D2[rx_end_pointer]=A_rs485_data[2]
+        'A_Queue_rx_D3[rx_end_pointer]=A_rs485_data[3]
+        'A_Queue_rx_D4[rx_end_pointer]=A_rs485_data[4]
+        'A_Queue_rx_D5[rx_end_pointer]=A_rs485_data[5]
+        'A_Queue_rx_D6[rx_end_pointer]=A_rs485_data[6]
+        'A_Queue_rx_D7[rx_end_pointer]=A_rs485_data[7]
+        'A_Queue_rx_SIDH[rx_end_pointer]=rs485_sidh
+        'A_Queue_rx_SIDL[rx_end_pointer]=rs485_sidl
+        'hserout2 ["Add: Rx_start_pointer=",dec rx_start_pointer," Rx_end_pointer=",dec rx_end_pointer," SID=",dec A_Queue_rx_D0[rx_end_pointer]," CID=",dec A_Queue_rx_D1[rx_end_pointer]," Instr_type=",dec A_Queue_rx_instr_type[rx_end_pointer],13,10]       
+        rx_end_pointer=rx_end_pointer+1
+        if rx_end_pointer>=MAXRS485RXQUEUE then rx_end_pointer=0
+        rx_queue_size=rx_queue_size+1
+        'hserout2 ["Add Next: Rx_start_pointer=",dec rx_start_pointer," Rx_end_pointer=",dec rx_end_pointer," rx_queue_size=",dec rx_queue_size,13,10]
+    'else
+    '    hserout2 ["RX BUFFER FULL: Rx_start_pointer=",dec rx_start_pointer," Rx_end_pointer=",dec rx_end_pointer," rx_queue_size=",dec rx_queue_size,13,10]    
+    endif   
+return
+
+Rem_RS485_Rx_queue:
+   if rx_queue_size<=MAXRS485RXQUEUE and rx_queue_size>0 then
+        'hserout2 ["Rem: Rx_start_pointer=",dec rx_start_pointer," Rx_end_pointer=",dec rx_end_pointer," SID=",dec A_Queue_rx_D0[rx_start_pointer]," CID=",dec A_Queue_rx_D1[rx_start_pointer]," Instr_type=",dec A_Queue_rx_instr_type[rx_start_pointer],13,10]   
+        rx_start_pointer=rx_start_pointer+1
+        if rx_start_pointer>=MAXRS485RXQUEUE then rx_start_pointer=0
+        rx_queue_size=rx_queue_size-1
+        'hserout2 ["Rem Next: Rx_start_pointer=",dec rx_start_pointer," Rx_end_pointer=",dec rx_end_pointer," rx_queue_size=",dec rx_queue_size,13,10]
+   else
+        rx_queue_size=0
+        rx_start_pointer=rx_end_pointer
+        'hserout2 ["Nothing to remove: Rx_start_pointer=",dec rx_start_pointer," Rx_end_pointer=",dec rx_end_pointer," rx_queue_size=",dec rx_queue_size,13,10]
+   endif
+return
+
+'---------------------------------------------------------------------------
+' RS485 routines
+'---------------------------------------------------------------------------
+
+check_inputs: 'during initialization, inputs needs to be checked
+    if mode=="I" then                'Bus is in Initialization mode
+        if Action_button==PRESSED then       'initialization button is pressed
+            if reset_count=0 then   'Message is sent for the first time
+                reset_count=10000
+                s1=0
+                s2=Mod_NE               'E->existing,N->New
+                gosub rs485_send
+                init_message_sent=YES
+            endif
+        else                        'initialization button is not pressed
+            if reset_count>0 then 
+                reset_count=reset_count-1
+            else
+                init_message_sent=NO
+            endif         
+        endif
+    else
+        'if Action_button==PRESSED then  'Action Button
+        '
+        '    Action_button=RELEASED     
+        'endif
+        if Power_button==PRESSED then  'CAN power button pressed
+            if Can_power_wait_active==NO then
+                Can_power_wait_active=YES
+                Can_power_wait_counter=0
+            endif                                                                                                 
+        else                    'CAN power button released
+            Can_power_wait_active=NO           
+        endif    
+    endif      
+return
+
+'testmode
+Test_instructions:
+    if A_StackSer1[6]=="V" then  'Firmware version
+        test_mode=YES
+        high RS485_DIR      'send mode
+        hserout ["RC",0,0,0,0,"V",Mod_ID0,hardware,version,firmware,built,13,10]
+        Gosub Low_rs485_mode
+    elseif A_stackser1[6]=="P" then   'Programming Eeprom
+        test_mode=YES
+        if A_stackser1[7]==0 then     '0->Write full serial number including date and errors
+            'i2cCommandCode=stackser1[8]        'address (only 1 address byte)
+            'i2cCommandData=stackser1[9]
+            'i2cCommandData1=stackser1[10]
+            'i2cCommandData2=stackser1[11]    
+            'gosub write_M24C02_data
+            'gosub read_M24C02_data
+            Serial_year=A_stackser1[8]
+            Serial_month=A_stackser1[9]
+            Serial_day=A_stackser1[10]
+            Serial_prod_company=A_stackser1[11]
+            Serial_number.byte1=A_stackser1[12]
+            Serial_number.byte0=A_stackser1[13]
+            Serial_errors=A_stackser1[14]
+            hserout2 ["Data Received: ",dec Serial_year," ",dec Serial_month," ",dec Serial_day," ",dec Serial_prod_company," ",dec serial_number," ",dec Serial_errors,13,10]
+            write 240,Serial_year
+            write 241,Serial_month
+            write 242,Serial_day
+            write 243,Serial_prod_company
+            write 244,Serial_number.byte1
+            write 245,Serial_number.byte0
+            write 246,Serial_errors
+            gosub Print_serial_number            
+            high RS485_DIR     'send mode
+            hserout ["RC",0,0,0,0,"P",0,Serial_year,Serial_month,Serial_day,Serial_prod_company,serial_number.byte1,serial_number.byte0,Serial_errors,13,10,13,10]
+            gosub Low_rs485_mode              
+        endif        
+    elseif A_StackSer1[6]=="B" then  'Provide Button state
+        high RS485_DIR      'send mode
+        hserout ["RC",0,0,0,0,"B",1,Action_button,13,10]
+        Gosub Low_rs485_mode                                
+    endif
+return
+
+Low_rs485_mode:
+    do until (TXSTA1.bit1=1)  'Wait until transmit buffer is empty
+    loop
+    low RS485_DIR  'Receive mode
+return
+
+check_SerialErrors:
+    if RCSTA1.2==1 then  'frame error bit
+        x=RCREG1
+    endif
+    if RCSTA1.1==1 then  'Overrun Error bit
+        RCSTA1.4=0    'disable receiver
+        pause 2
+        RCSTA1.4=1    'enable receiver
+    endif
+    if RCSTA2.2==1 then  'frame error bit
+        x=RCREG2
+    endif
+    if RCSTA2.1==1 then  'Overrun Error bit
+        RCSTA2.4=0    'disable receiver
+        pause 2
+        RCSTA2.4=1    'enable receiver
+    endif  
+return
+
+'bootloader
+send_F_response:
+    pauseus 1500
+    high RS485_DIR   'send mode
+    if s1=="V" then  'Firmware version
+        CRC=Mod_id0+Mod_id1+Mod_id2+Mod_id3+"F"+"V"+255+hardware+version+firmware+built
+        'hserout ["AAARC",Mod_id0,Mod_id1,Mod_id2,Mod_id3,"F","V",255,hardware,version,firmware,built,0,"C",CRC.byte1,CRC.byte0,13,10,13,10]
+        hserout ["RC",Mod_id0,Mod_id1,Mod_id2,Mod_id3,"F","V",255,hardware,version,firmware,built,0,"C",CRC.byte1,CRC.byte0,13,10,13,10]
+    elseif s1="L" then  'Firmware version and serial number
+        CRC=Mod_id0+Mod_id1+Mod_id2+Mod_id3+"F"+"L"+255+hardware+version+firmware+built+Serial_year+Serial_month+Serial_day+Serial_prod_company+serial_number.byte1+serial_number.byte0+Serial_errors
+        hserout ["RC",Mod_id0,Mod_id1,Mod_id2,Mod_id3,"F","L",255,hardware,version,firmware,built,0,Serial_year,Serial_month,Serial_day,Serial_prod_company,serial_number.byte1,serial_number.byte0,Serial_errors,"C",CRC.byte1,CRC.byte0,13,10,13,10]        
+        'hserout2 ["Sending FL",13,10]        
+    else            'Reset
+        CRC=Mod_id0+Mod_id1+Mod_id2+Mod_id3+"F"+"R"+255
+        'hserout ["AAARC",Mod_id0,Mod_id1,Mod_id2,Mod_id3,"F","R",255,"C",CRC.byte1,CRC.byte0,13,10,13,10]
+        hserout ["RC",Mod_id0,Mod_id1,Mod_id2,Mod_id3,"F","R",255,"C",CRC.byte1,CRC.byte0,13,10,13,10]
+    endif
+    Gosub Low_rs485_mode
+return
+
+'hier Search Module
+'generate_ID:
+'    if Mod_NE<>"E" and Mod_NE<>"P" then   'Not yet a unique code
+'        Mod_NE="N"
+'        for q=0 to 2
+'            random w1                              'generate random ID
+'            if w1.byte0<>255 and w1.byte0<>0 then  'Random value if ok
+'                tmp[q]=w1.byte0
+'            else                                   'Random value is not ok
+'                tmp[q]=171+q                         'Random value (My bithday :))
+'            endif
+'        next q
+'        Mod_ID1=tmp[0]         
+'        Mod_ID2=tmp[1]
+'        Mod_ID3=tmp[2]
+'    endif
+'return
+
+generate_ID:
+    if Mod_NE<>"E" and Mod_NE<>"P" then   'Not yet a unique code
+        Mod_NE="N"
+        pauseus (serial_number.byte0+serial_month+serial_day)
+        random w1
+        'for q=0 to 2
+        '    pauseus (serial_number+serial_day)     'To make sure the generated  
+        '    random w1                              'generate random ID
+        '    if w1.byte0<>255 and w1.byte0<>0 then  'Random value if ok
+        '        tmp[q]=w1.byte0
+        '    else                                   'Random value is not ok
+        '        tmp[q]=171+q                         'Random value (My bithday :))
+        '    endif
+        'next q
+        Mod_ID1=Serial_day+w1.byte1         
+        Mod_ID2=Serial_number.byte1+w1.byte0
+        Mod_ID3=serial_number.byte0
+    endif
+return
+
+check_startupreset:
+    gosub read_tca9539_data   'Check input even when input hasn't changed
+    for s=0 to 40
+        if Action_button=PRESSED then test=1 
+        if Action_button=RELEASED then s=40 : test=0  'button not pressed long enough        
+        pause 50
+    next s
+    if test>0 then
+        write 0,255        'Mode_ID in eeprom controller
+        write 1,255
+        write 2,255
+        write 3,255
+        write 4,255
+        hserout2 ["Clear ID",13,10]
+        for s=0 to 3
+            LED_STATUS_RED=LED_ON
+            LED_STATUS_GREEN=LED_ON
+            LED_STATUS_RED_BLINK=BLINK_OFF
+            LED_STATUS_GREEN_BLINK=BLINK_OFF             
+            gosub write_tca9539_data       
+            pause 100
+            LED_STATUS_RED=LED_OFF
+            LED_STATUS_GREEN=LED_OFF
+            gosub write_tca9539_data       
+            pause 100 
+        next s 
+    endif    
+return
+
+'hier Search Module
+rs485_send:
+    'if mode=="L" then 
+    '    LED_STATUS_RED=LED_ON
+    '    LED_STATUS_GREEN=LED_ON
+    '    LED_STATUS_RED_BLINK=BLINK_OFF
+    '    LED_STATUS_GREEN_BLINK=BLINK_OFF             
+    'endif    
+    rs485_length=6              'Payload length
+    A_rs485_data[0]=Mod_ID0     'Payload data
+    A_rs485_data[1]=Mod_ID1
+    A_rs485_data[2]=Mod_ID2
+    A_rs485_data[3]=Mod_ID3
+    A_rs485_data[4]=s1
+    A_rs485_data[5]=s2
+    gosub Calc_CRC16            'Calculate CRC
+    pauseus 1500
+    high RS485_DIR              'send mode
+    hserout ["RC",A_rs485_data[0],A_rs485_data[1],A_rs485_data[2],A_rs485_data[3],A_rs485_data[4],A_rs485_data[5],"C",CRC.byte1,CRC.Byte0,13,10]
+    Gosub Low_rs485_mode
+return
+
+'hier Search Module
+Calc_CRC16:
+    CRC=$FFFF	
+    For i=0 to rs485_length-1
+        CRC=CRC^A_rs485_data[i]
+        For j=1 to 8 
+            IF CRC.Bit0=1 Then 
+                CRC=$A001^(CRC>>1)
+            Else 
+                CRC=CRC>>1
+            EndIF
+        Next j
+    Next i
+return
+
+'hier Search Module
+Check_CRC16_in_RS485_message:
+    CRC=$FFFF	
+    For i=0 to rs485_length-1
+        CRC=CRC^A_StackSer1[i]
+        For j=1 to 8 
+            IF CRC.Bit0=1 Then 
+                CRC=$A001^(CRC>>1)
+            Else 
+                CRC=CRC>>1
+            EndIF
+        Next j
+    Next i
+return
+
+'hier Search Module
+activate_device:
+    if A_StackSer1[2]==Mod_ID0 and A_StackSer1[3]==Mod_ID1 and A_StackSer1[4]==Mod_ID2 and A_StackSer1[5]==Mod_ID3 and (init_message_sent==YES or automatic_module_search==YES) then
+        if Mod_NE=="N" or Mod_NE=="P" then  'ID is New or Programmed (and thus new)
+            hserout2 ["Add new module ",Mod_ID0,".",dec Mod_ID1,".",dec Mod_ID2,".",dec Mod_ID3," char15 ",dec A_StackSer1[15],13,10]
+            if A_StackSer1[15]="c" then     'CRC is included in the message, otherwise ignore
+                rs485_length=15
+                gosub Check_CRC16_in_RS485_message
+                hserout2 ["CRC ",dec A_StackSer1[16]," ",dec A_StackSer1[17]," ",dec CRC.byte1," ",dec CRC.byte0,13,10]
+                if CRC.byte1==A_StackSer1[16] and CRC.byte0==A_StackSer1[17] then
+                    Mod_NE="E"
+                    write 0,Mod_NE          'Mode_ID in eeprom controller
+                    write 1,Mod_ID0
+                    write 2,Mod_ID1
+                    write 3,Mod_ID2
+                    write 4,Mod_ID3
+                    LED_STATUS_RED=LED_OFF
+                    LED_STATUS_GREEN=LED_ON
+                    LED_STATUS_RED_BLINK=BLINK_OFF
+                    LED_STATUS_GREEN_BLINK=BLINK_OFF                  
+                endif
+            endif          
+        endif         
+    endif   
+return
+
+
+Nightrider_on_frontpanel:
+    for i=0 to 7
+        LED_STATUS_RED=LED_ON
+        LED_STATUS_GREEN=LED_ON
+        LED_STATUS_RED_BLINK=BLINK_OFF
+        LED_STATUS_GREEN_BLINK=BLINK_OFF
+        gosub Task_blink_leds
+        gosub write_tca9539_data    
+        pause 50
+        LED_STATUS_RED=LED_OFF
+        LED_STATUS_GREEN=LED_OFF
+        gosub Task_blink_leds     
+        gosub write_tca9539_data
+        pause 50
+    next i      
+return
+
+All_leds_on:
+    LED_STATUS_RED=LED_ON
+    LED_STATUS_GREEN=LED_ON
+    LED_STATUS_RED_BLINK=BLINK_OFF
+    LED_STATUS_GREEN_BLINK=BLINK_OFF
+    gosub Task_blink_leds    
+    gosub write_tca9539_data     
+    pause 200
+    LED_STATUS_RED=LED_OFF
+    LED_STATUS_GREEN=LED_OFF
+    gosub Task_blink_leds     
+    gosub write_tca9539_data
+    pause 200    
+return
+
+'Check_button_pressed:
+'    if INTERRUPT_PIN=0 then  'one of the button's is pressed
+'        hserout2 ["Button pressed",13,10]
+'        'read i2c button pressed
+'        if TCA9539_FOUND=YES then
+'            gosub read_tca9539_data
+'        else        
+'            gosub check_tca9539     'check chip config
+'        endif
+'        if test_mode==YES then
+'            'hserout2 ["Button pressed in test mode",13,10]
+'            high RS485_mode              'send mode
+'            hserout ["RC",0,0,0,0,"B",1,Butt1,0,0,0,0,0,0,0,13,10]
+'            gosub Low_rs485_mode
+'        endif    
+'    endif
+'return
+
+'------------------------------------------------------------------------------
+' I2C subroutines
+'------------------------------------------------------------------------------
+
+I2C_Blocking:
+    T2CON.2=1       'start Timer2
+    while (i2cBusy=YES)     'first check if a non-blocking i2c is still ongoing before blocking routine can be executed
+        gosub I2C_Non_Blocking
+    wend
+    i2cmode=1
+    TMR0L=0
+    TMR0H=0  
+    T0CON.7=1  'timer 0 enabled     
+    Fase=0
+    ByteNr=0
+    current_i2c_state_machine=BLOCKINGI2C   
+    while (i2cMode>0)
+        pauseus 50
+        gosub I2C_Instruction
+        'hserout2 ["Fase ",dec Fase,13,10]  
+    wend
+return
+
+I2C_Non_Blocking_prepare:
+    i2cBusy=YES
+    i2cmode=1
+    TMR0L=0
+    TMR0H=0  
+    T0CON.7=1       'timer 0 enabled 
+    T2CON.2=1       'start Timer2    
+    Fase=0
+    ByteNr=0    
+return
+
+I2C_Non_Blocking:
+    'if i2cMode>0 then
+        if i2cNextStep==YES then     'Only do the next step every 200us
+            i2cNextStep=NO
+            gosub I2C_Instruction
+        endif
+    'endif
+return
+
+check_hardware:
+    hserout2 ["-----Hardware Check-----",13,10]
+    print_error=NO      'Do not print on the console when I2C routine failed
+    CLEARWDT
+    gosub check_tca9539
+    CLEARWDT
+    gosub write_LM75_data
+    CLEARWDT
+    gosub check_fram
+    CLEARWDT
+    gosub check_small_eeprom
+    CLEARWDT
+    gosub check_large_eeprom         
+return
+
+check_tca9539:
+    'hserout2 ["Write config chip 0 ",bin8 A_i2cdata,13,10]
+    i2ccont=TCA9539_0_ADDRESS
+    i2cCommandCode=6              '6 and 7 are the config registers
+    i2cCommandData=%00000000      'All Outputs 
+    i2cCommandData1=%11000000     '2 inputs, the rest outputs 
+    gosub Set_parameters_I2C_write_tca9539 
+    gosub I2C_Blocking
+    if err==YES then
+        TCA9539_FOUND=NO
+        hserout2 ["No Front Panel",13,10]
+    else
+        TCA9539_FOUND=YES
+        hserout2 ["Front Panel found",13,10]
+        gosub write_tca9539_data
+    endif     
+return 
+
+check_fram:
+    i2ccont=FM24C04_ADDRESS
+    i2cCommandData=0    'address
+    gosub Set_parameters_I2C_read_fram
+    gosub I2C_Blocking
+    if err==YES then
+        FRAM_FOUND=NO
+        hserout2 ["No FRAM",13,10]
+    else
+        FRAM_FOUND=YES
+        hserout2 ["FRAM found",13,10]
+    endif    
+return
+
+check_large_eeprom:
+    i2ccont=F24FC1025_ADDRESS
+    i2cCommandData=0    'address High
+    i2cCommandData1=0   'address Low
+    gosub Set_parameters_I2C_read_large_eeprom
+    gosub I2C_Blocking
+    if err==YES then
+        LARGE_EEPROM_FOUND=NO
+        hserout2 ["No Large Eeprom (24FC1025)",13,10]
+    else
+        LARGE_EEPROM_FOUND=YES
+        hserout2 ["Large Eeprom (24FC1025) found",13,10]
+    endif    
+return
+
+check_small_eeprom:
+    i2ccont=M24C02_ADDRESS
+    i2cCommandData=0    'address
+    gosub Set_parameters_I2C_read_fram
+    gosub I2C_Blocking
+    if err==YES then
+        SMALL_EEPROM_FOUND=NO
+        hserout2 ["No Small Eeprom (M24C02)",13,10]
+    else
+        SMALL_EEPROM_FOUND=YES
+        hserout2 ["Small Eeprom (M24C02) found",13,10]
+    endif     
+return    
+
+write_LM75_data:
+    i2ccont=LM75_ADDRESS
+    i2cCommandCode=0
+    i2cCommandData=0
+    i2cCommandData1=0
+    gosub Set_parameters_I2C_write_LM75
+    gosub I2C_Blocking
+    if err==YES then
+        hserout2 ["No LM75",13,10]
+        LM75_FOUND=NO
+    else
+        hserout2 ["LM75 found",13,10]
+        LM75_FOUND=YES
+    endif    
+return
+
+write_tca9539_data:
+    if tca9539_data_old<>tca9539_data and TCA9539_FOUND==YES then
+        i2ccont=TCA9539_0_ADDRESS
+        i2cCommandCode=2              '2 and 3 are the output port registers
+        i2cCommandData=tca9539_data.byte0      'for output 0-7
+        i2cCommandData1=tca9539_data.byte1     'for output 8-15
+        'hserout2 ["Write ",bin8 i2cCommandData1," ",bin8 i2cCommandData,13,10]
+        gosub Set_parameters_I2C_write_tca9539 
+        gosub I2C_Blocking
+        tca9539_data_old=tca9539_data
+    endif    
+return
+
+read_tca9539_data:
+    if TCA9539_FOUND==YES then
+        i2ccont=TCA9539_0_ADDRESS
+        i2cCommandCode=0              '0 and 1 are the input port registers
+        gosub Set_parameters_I2C_read_tca9539
+        gosub I2C_Blocking
+        'hserout2 ["I2C input data(0) ",bin8 A_i2cdata[1]," ",bin8 A_i2cdata[0]," Adrr: ",bin8 i2ccont,13,10]
+        x=A_i2cdata[1]
+        Action_button=~x.bit6
+        Power_button=~x.bit7
+    endif   
+return
+
+Set_parameters_I2C_write_LM75:
+    A_I2cStep[0]=SENT_START
+    A_I2cStep[1]=CHECK_INTERRUPT
+    
+    A_I2cStep[2]=SENT_ADDRESS_W
+    A_I2cStep[3]=CHECK_INTERRUPT
+    A_I2cStep[4]=CHECK_ACK
+    
+    A_I2cStep[5]=SENT_COMMANDCODE
+    A_I2cStep[6]=CHECK_INTERRUPT
+    A_I2cStep[7]=CHECK_ACK
+    
+    A_I2cStep[8]=SENT_COMMANDDATA
+    A_I2cStep[9]=CHECK_INTERRUPT
+    A_I2cStep[10]=CHECK_ACK
+    
+    A_I2cStep[11]=SENT_COMMANDDATA1
+    A_I2cStep[12]=CHECK_INTERRUPT
+    A_I2cStep[13]=CHECK_ACK
+      
+    A_I2cStep[14]=SENT_STOP
+    A_I2cStep[15]=CHECK_INTERRUPT
+    A_I2cStep[16]=PROCESS_DONE
+return
+
+Set_parameters_I2C_write_tca9539:   'Write  
+    A_I2cStep[0]=SENT_START
+    A_I2cStep[1]=CHECK_INTERRUPT
+    A_I2cStep[2]=SENT_ADDRESS_W
+    A_I2cStep[3]=CHECK_INTERRUPT
+    A_I2cStep[4]=CHECK_ACK
+    A_I2cStep[5]=SENT_COMMANDCODE
+    A_I2cStep[6]=CHECK_INTERRUPT
+    A_I2cStep[7]=CHECK_ACK
+    A_I2cStep[8]=SENT_COMMANDDATA
+    A_I2cStep[9]=CHECK_INTERRUPT
+    A_I2cStep[10]=CHECK_ACK
+    A_I2cStep[11]=SENT_COMMANDDATA1
+    A_I2cStep[12]=CHECK_INTERRUPT
+    A_I2cStep[13]=CHECK_ACK  
+    A_I2cStep[14]=SENT_STOP
+    A_I2cStep[15]=CHECK_INTERRUPT
+    'A_I2cStep[16]=SET_WAITTIME_1MS
+    'A_I2cStep[17]=WAIT_NOW
+    A_I2cStep[16]=PROCESS_DONE  
+return
+
+Set_parameters_I2C_read_tca9539:    'Read 2 bytes from TCA9539
+    A_I2cStep[0]=SENT_START
+    A_I2cStep[1]=CHECK_INTERRUPT
+    A_I2cStep[2]=SENT_ADDRESS_W
+    A_I2cStep[3]=CHECK_INTERRUPT
+    A_I2cStep[4]=CHECK_ACK
+    A_I2cStep[5]=SENT_COMMANDCODE
+    A_I2cStep[6]=CHECK_INTERRUPT
+    A_I2cStep[7]=CHECK_ACK   
+    A_I2cStep[8]=REPEATED_START
+    A_I2cStep[9]=CHECK_INTERRUPT
+    A_I2cStep[10]=SENT_ADDRESS_R
+    A_I2cStep[11]=CHECK_INTERRUPT
+    A_I2cStep[12]=CHECK_ACK
+    A_I2cStep[13]=ENABLE_RECEIVING
+    A_I2cStep[14]=CHECK_INTERRUPT
+    A_I2cStep[15]=RECEIVE_DATA          'Byte0 received
+    A_I2cStep[16]=SENT_ACK
+    A_I2cStep[17]=CHECK_INTERRUPT
+    A_I2cStep[18]=ENABLE_RECEIVING
+    A_I2cStep[19]=CHECK_INTERRUPT
+    A_I2cStep[20]=RECEIVE_DATA          'Byte1 received
+    A_I2cStep[21]=SENT_NACK
+    A_I2cStep[22]=CHECK_INTERRUPT      
+    A_I2cStep[23]=SENT_STOP
+    A_I2cStep[24]=CHECK_INTERRUPT 
+    'A_I2cStep[25]=SET_WAITTIME_1MS
+    'A_I2cStep[26]=WAIT_NOW                
+    A_I2cStep[25]=PROCESS_DONE
+return
+
+Set_parameters_I2C_read_fram:           'Read from FRAM    
+    A_I2cStep[0]=SENT_START
+    A_I2cStep[1]=CHECK_INTERRUPT
+    
+    A_I2cStep[2]=SENT_ADDRESS_W
+    A_I2cStep[3]=CHECK_INTERRUPT
+    A_I2cStep[4]=CHECK_ACK
+    
+    A_I2cStep[5]=SENT_COMMANDDATA         'Adress High Byte
+    A_I2cStep[6]=CHECK_INTERRUPT
+    A_I2cStep[7]=CHECK_ACK   
+       
+    A_I2cStep[8]=REPEATED_START
+    A_I2cStep[9]=CHECK_INTERRUPT
+    
+    A_I2cStep[10]=SENT_ADDRESS_R
+    A_I2cStep[11]=CHECK_INTERRUPT
+    A_I2cStep[12]=CHECK_ACK
+    
+    A_I2cStep[13]=ENABLE_RECEIVING
+    A_I2cStep[14]=CHECK_INTERRUPT
+    A_I2cStep[15]=RECEIVE_DATA            'Byte0 received
+    A_I2cStep[16]=SENT_NACK
+    A_I2cStep[17]=CHECK_INTERRUPT       
+    
+    A_I2cStep[18]=SENT_STOP
+    A_I2cStep[19]=CHECK_INTERRUPT             
+    A_I2cStep[20]=PROCESS_DONE
+return
+
+Set_parameters_I2C_read_large_eeprom:     'Read from Eeprom    
+    A_I2cStep[0]=SENT_START
+    A_I2cStep[1]=CHECK_INTERRUPT
+    
+    A_I2cStep[2]=SENT_ADDRESS_W
+    A_I2cStep[3]=CHECK_INTERRUPT
+    A_I2cStep[4]=CHECK_ACK
+    
+    A_I2cStep[5]=SENT_COMMANDDATA         'Adress High Byte
+    A_I2cStep[6]=CHECK_INTERRUPT
+    A_I2cStep[7]=CHECK_ACK
+       
+    A_I2cStep[8]=SENT_COMMANDDATA1        'Adress Low Byte
+    A_I2cStep[9]=CHECK_INTERRUPT
+    A_I2cStep[10]=CHECK_ACK    
+       
+    A_I2cStep[11]=REPEATED_START
+    A_I2cStep[12]=CHECK_INTERRUPT
+    
+    A_I2cStep[13]=SENT_ADDRESS_R
+    A_I2cStep[14]=CHECK_INTERRUPT
+    A_I2cStep[15]=CHECK_ACK
+    
+    A_I2cStep[16]=ENABLE_RECEIVING
+    A_I2cStep[17]=CHECK_INTERRUPT
+    A_I2cStep[18]=RECEIVE_DATA            'Byte0 received
+    A_I2cStep[19]=SENT_NACK
+    A_I2cStep[20]=CHECK_INTERRUPT       
+    
+    A_I2cStep[21]=SENT_STOP
+    A_I2cStep[22]=CHECK_INTERRUPT             
+    A_I2cStep[23]=PROCESS_DONE
+return
+
+I2C_Instruction:
+    instruction_done=0      'instruction isn't executed yet
+    if A_I2cStep[Fase]==CHECK_ACK then
+        gosub check_i2c_acknowledge
+        if i2cAck==1 then    'Ack received
+            instruction_done=1       
+        endif
+    elseif A_I2cStep[Fase]==SENT_START then
+        i2cModeOld=i2cMode      'Check_interrupt is needed as a next step
+        SSPCON2.0=1             'Sent start
+        instruction_done=1      'instruction executed
+    elseif A_I2cStep[Fase]==SENT_STOP then
+        i2cModeOld=i2cMode      'Check_interrupt is needed as a next step
+        SSPCON2.2=1             'Sent stop
+        instruction_done=1      'instruction executed    
+    elseif A_I2cStep[Fase]==CHECK_INTERRUPT then
+        if i2cMode<>i2cModeOld then 'interrupt happened
+            instruction_done=1        'instruction executed
+        endif    
+    elseif A_I2cStep[Fase]==SENT_ADDRESS_W then
+        i2cModeOld=i2cMode
+        i2ccont.bit0=0          'WRITE
+        SSPBUF=i2ccont
+        instruction_done=1      'instruction executed
+    elseif A_I2cStep[Fase]==SENT_ADDRESS_R then
+        i2cModeOld=i2cMode
+        i2ccont.bit0=1          'READ
+        SSPBUF=i2ccont
+        instruction_done=1      'instruction executed    
+    elseif A_I2cStep[Fase]==SENT_COMMANDCODE then
+        i2cModeOld=i2cMode
+        SSPBUF=i2cCommandCode
+        instruction_done=1      'instruction executed 
+    elseif A_I2cStep[Fase]==SENT_COMMANDDATA then
+        i2cModeOld=i2cMode
+        SSPBUF=i2cCommandData
+        instruction_done=1      'instruction executed
+    elseif A_I2cStep[Fase]==SENT_COMMANDDATA1 then
+        i2cModeOld=i2cMode
+        SSPBUF=i2cCommandData1
+        instruction_done=1      'instruction executed 
+    elseif A_I2cStep[Fase]==SENT_COMMANDDATA2 then
+        i2cModeOld=i2cMode
+        SSPBUF=i2cCommandData2
+        instruction_done=1      'instruction executed 
+    elseif A_I2cStep[Fase]==SENT_COMMANDDATA3 then
+        i2cModeOld=i2cMode
+        SSPBUF=i2cCommandData3
+        instruction_done=1      'instruction executed            
+    elseif A_I2cStep[Fase]==ENABLE_RECEIVING then 
+        i2cModeOld=i2cMode      'Check_interrupt is needed as a next step
+        SSPCON2.3=1             'enable receiving
+        instruction_done=1      'instruction executed
+    elseif A_I2cStep[Fase]==RECEIVE_DATA then
+        if SSPSTAT.0==1 then     'Buffer full 
+            A_i2cdata[ByteNr]=SSPBUF
+            if ByteNr<(MAXI2CBYTES-1) then ByteNr=ByteNr+1
+            instruction_done=1    'instruction executed         
+        endif
+    elseif A_I2cStep[Fase]==SENT_ACK then
+        i2cModeOld=i2cMode      'Check_interrupt is needed as a next step
+        SSPCON2.5=0             'ACK, not NACK
+        SSPCON2.4=1             'Sent Ack
+        instruction_done=1      'instruction executed   
+    elseif A_I2cStep[Fase]==SENT_NACK then
+        i2cModeOld=i2cMode      'Check_interrupt is needed as a next step
+        SSPCON2.5=1             'NACK, not ACK          
+        SSPCON2.4=1             'Sent NAck
+        instruction_done=1      'instruction executed                 
+    elseif A_I2cStep[Fase]==REPEATED_START then   
+        i2cModeOld=i2cMode      'Check_interrupt is needed as a next step
+        SSPCON2.1=1             'Repeated start
+        instruction_done=1      'instruction executed      
+    elseif A_I2cStep[Fase]==PROCESS_DONE then
+        i2cMode=0
+        T0CON.7=0               'stop timer1
+        T0CON.7=0 
+        err=NO
+        i2cerror=0
+        i2cBusy=NO
+        A_state_machine_phase[current_i2c_state_machine]=A_state_machine_phase[current_i2c_state_machine]+1
+    elseif A_I2cStep[Fase]==SET_WAITTIME_1MS then
+        i2cWaitTime=5 
+        instruction_done=1      'instruction executed
+    elseif A_I2cStep[Fase]==SET_WAITTIME_10MS then
+        i2cWaitTime=50
+        instruction_done=1      'instruction executed
+    elseif A_I2cStep[Fase]==WAIT_NOW then
+        'T0CON.7=0  'timer 0 disabled  
+        if i2cWaitTime==0 then instruction_done=1      'instruction executed      
+    endif
+    if instruction_done==1 then Fase=Fase+1
+return
+
+check_i2c_acknowledge:
+    if SSPCON2.6==0 then 'Acknowledge received from slave
+        i2cAck=1 'Acknowledge received
+        SSPCON2.6=1
+    else
+        i2cAck=0
+    endif 
+return
+
+Check_i2c_error:
+ 
+return
+   
+End
