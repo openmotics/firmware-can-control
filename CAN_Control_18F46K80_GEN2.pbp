@@ -27,11 +27,11 @@
 @ CONFIG SOSCSEL=DIG
 
 '-----------Constants--------------------------
-HARDWARE                con     1
+hardware                con     1
 
 VERSION                 con     4
 FIRMWARE                con     1
-BUILT                   con     37
+BUILT                   con     39
 
 MAX_NUMBER_CAN_MODULES  con     39
 MAX_NUMBER_CAN_INPUTS   CON     232
@@ -1193,10 +1193,12 @@ Read_dali_input_from_eeprom:
   for t=0 to (MAX_DALI_INPUTS-1)
     DaliInputId[t]=dataread[t]
     read 500+t,DaliInputLink[t]
+    'delete
     'hserout2 ["Read Eeprom Dali ",dec t," ",dec DaliInputId[t]," ",dec DaliInputLink[t],13,10]
     if DaliInputId[t]<128 and DaliInputLink[t]>239 then     'A Dali Input exist but is not yet linked to an output
       DaliInputLink[t]=NrOfInputs
       write 500+t,NrOfInputs
+      'delete
       'hserout2 ["Write Eeprom Dali ",dec t," ",dec DaliInputLink[t],13,10]
       NrOfInputsNew=NrOfInputs
       gosub Check_nrOfInputs
@@ -1332,6 +1334,7 @@ Update_all_leds:
       UpdateLedState=0
       UpdateLeds=0
       gosub Sent_NrOfInputs
+      '?
       if NrOfInputs==0 or NrOfSensors>0 then gosub Sent_NrOfSensors
       gosub Calculate_NrofOutputs
       gosub read_eeprom_ledMinMax
@@ -1376,6 +1379,7 @@ Reset_power:
       elseif ResetPower=4 then
         ResetPower=0
         gosub Sent_NrOfInputs
+        '?
         if NrOfInputs==0 or NrOfSensors>0 then gosub Sent_NrOfSensors
       endif
     endif          
@@ -1728,6 +1732,8 @@ Check_can_message_detail:
         gosub Set_InputState
         if QueueRxdByte2[t]<240 then
             NrOfInputsNew=QueueRxdByte2[t]
+            'delete
+            'hserout2 ["Input received: ",dec NrOfInputsNew," ",dec Nrofinputs,13,10]
             gosub Check_NrOfInputs    
         endif  
     elseif QueueRxdByte0[t]=2 and QueueRxdByte1[t]=2 then  'Sensor information
@@ -1992,6 +1998,8 @@ Check_NrOfInputs:
         if NrOfInputs<MAX_NUMBER_CAN_INPUTS then 
             NrOfInputs=NrOfInputs+1       
             write 304,NrOfInputs
+            'delete
+            'hserout2 ["Increase nr of inputs: ",dec Nrofinputs,13,10]
         endif  
         gosub Sent_NrOfInputs  
     endif 
@@ -2006,7 +2014,7 @@ Check_NrOfSensors:
         write 305,NrOfSensors
         gosub Sent_NrOfSensors
         'delete
-        'hserout2 ["----New NrOfSensors= ",dec NrOfSensors,"----",13,10]  
+        'hserout2 ["Increase nr of sensors: ",dec Nrofsensors,13,10] 
     endif 
 return
 
@@ -2798,8 +2806,18 @@ Check_erase_message:                                            'CLI instruction
             NrOfInputs=0
             NrOfInputsNew=0 
             write 304,NrOfInputs
+            QueueTxdByte0[QueueTxdPointer]=0
+            QueueTxdByte1[QueueTxdPointer]=190      'Erase all uCAN Inputs or Sensors
+            QueueTxdByte2[QueueTxdPointer]="I"      'Erase inputs
+            QueueTxdByte3[QueueTxdPointer]=69       'Erase code
+            QueueTxdByte4[QueueTxdPointer]=1        
+            QueueTxdByte5[QueueTxdPointer]=17
+            QueueTxdTime[QueueTxdPointer]=0         'sent message immeadiatly 
+            QueueTxdRetries[QueueTxdPointer]=0      'No retries so no response is expected 
+            QueueTxdNrBytes[QueueTxdPointer]=7 
+            gosub Add_Txd_queue           
             gosub Sent_NrOfInputs
-            s1="X"                                'Erase done
+            s1="X"                                  'Erase done
             gosub send_F_response            
             'delete
             'hserout2 ["Erase CAN Control Inputs",13,10]
@@ -2807,11 +2825,31 @@ Check_erase_message:                                            'CLI instruction
             NrOfSensors=0
             NrOfSensorsNew=0
             write 305,NrOfSensors
+            QueueTxdByte0[QueueTxdPointer]=0
+            QueueTxdByte1[QueueTxdPointer]=190      'Erase all uCAN Inputs or Sensors
+            QueueTxdByte2[QueueTxdPointer]="S"      'Erase Sensors
+            QueueTxdByte3[QueueTxdPointer]=69       'Erase code
+            QueueTxdByte4[QueueTxdPointer]=1        
+            QueueTxdByte5[QueueTxdPointer]=17
+            QueueTxdTime[QueueTxdPointer]=0         'sent message immeadiatly 
+            QueueTxdRetries[QueueTxdPointer]=0      'No retries so no response is expected 
+            QueueTxdNrBytes[QueueTxdPointer]=7 
+            gosub Add_Txd_queue            
             gosub Sent_NrOfSensors
-            s1="X"                                'Erase done
+            s1="X"                                  'Erase done
             gosub send_F_response            
             'delete
             'hserout2 ["Erase CAN Control Sensors",13,10]
+        endif
+        if NrOfSensors==0 and NrOfInputs==0 then
+            gosub Erase_eeprom_input_modules
+            Gosub Erase_eeprom_output_modules
+            for q=0 to 31
+                Temperature[q]=255
+                Humidity[q]=255
+                ADCvalue[q]=255
+                Sensor_Error[q]=0
+            next q
         endif
     endif
 return
@@ -2964,7 +3002,9 @@ Check_Temperature_Module:
                         QueueTxdRetries[QueueTxdPointer]=0       'No retries so no response is expected 
                         QueueTxdNrBytes[QueueTxdPointer]=6 
                         gosub Add_Txd_queue                 
-                        IndicateSensorOld=((SensorCT-1)*8)+indicate              
+                        IndicateSensorOld=((SensorCT-1)*8)+indicate
+                        'delete
+                        'hserout2 ["Indicate sensor nr: ",dec IndicateSensorOld," indicate=",dec indicate,13,10]                                      
                     endif
                     if stackser1[4]="T" then        'Temperature
                         gosub rs485_send2
@@ -3384,7 +3424,8 @@ activate_device:
               write 2+w1,Mod_ID1_I[u]
               write 3+w1,Mod_ID2_I[u]
               write 4+w1,Mod_ID3_I[u]
-              'hserout2 ["Write new ID ","C ",dec Mod_ID1C," ",dec Mod_ID2C," ",dec Mod_ID3C," ",Mod_NEC,13,10]           
+              'delete
+              'hserout2 ["Write new ID CC ","C ",dec Mod_ID1C," ",dec Mod_ID2C," ",dec Mod_ID3C," ",Mod_NEC,13,10]           
               CAN_Init=1
             endif  
           else
@@ -3395,6 +3436,8 @@ activate_device:
             write 2+w1,Mod_ID1_I[u]
             write 3+w1,Mod_ID2_I[u]
             write 4+w1,Mod_ID3_I[u]
+            'delete
+            'hserout2 ["Write new ID input ","C ",dec Mod_ID1C," ",dec Mod_ID2C," ",dec Mod_ID3C," ",Mod_NEC," Nrofinputs=",dec Nrofinputs,13,10]
           endif
         endif 
         u=MAX_INPUT_MODULES-1    'exit        
@@ -3643,6 +3686,59 @@ Check_input_startup:
   next s
 return
 
+Erase_eeprom_input_modules:
+  for q=0 to (MAX_INPUT_MODULES-1)
+    w1=q*5  
+    if Mod_NE_I[q]="E" then
+      write w1,255        'Mode_ID in eeprom controller
+      write 1+w1,255
+      write 2+w1,255
+      write 3+w1,255
+      write 4+w1,255
+      Mod_NE_I[q]=255        'Mode_ID in eeprom controller
+      mod_ID0_I[q]=255
+      Mod_ID1_I[q]=255
+      Mod_ID2_I[q]=255
+      Mod_ID3_I[q]=255
+      clearwdt                    
+    endif    
+  next q
+  NrOfInputModules=0
+  NrOfSensorModules=0
+  NrOfCanControlModules=0
+  InputCount=0
+  SensorCount=0
+  NrOfInputs=0
+  NrOfInputsNew=0
+  NrOfSensors=0
+  NrOfSensorsNew=0
+  NrOfCanModules=0
+   'delete     
+  'hserout2 ["Erase Input modules",13,10]
+return
+
+Erase_eeprom_output_modules:
+  for q=30 to (MAX_OUTPUT_MODULES+29)
+    w1=q*5  
+    if Mod_NE_O[q-30]="E" then
+      write w1,255        'Mode_ID in eeprom controller
+      write 1+w1,255
+      write 2+w1,255
+      write 3+w1,255
+      write 4+w1,255
+      Mod_NE_O[q-30]=255        'Mode_ID in eeprom controller
+      mod_ID0_O[q-30]=255
+      Mod_ID1_O[q-30]=255
+      Mod_ID2_O[q-30]=255
+      Mod_ID3_O[q-30]=255
+      clearwdt                    
+    endif    
+  next q
+  'delete
+  NrOfOutputModules=0
+  'hserout2 ["Erase Output modules",13,10]
+return
+
 Erase_eeprom:
   low LED_ST
   DataWrite[0]=36   'all leds on
@@ -3651,6 +3747,7 @@ Erase_eeprom:
   gosub Write_i2c  
   NrOfInputModules=0
   NrOfCanControlModules=0
+  NrOfSensorModules=0
   NrOfOutputModules=0
   InputCount=0
   SensorCount=0
@@ -3676,38 +3773,8 @@ Erase_eeprom:
   'Addr CRC 324, 325, 326, 327 - RESERVED
   'Bootloader 328, 329 (flashmode), 330 (Time in bootloader), 331 (status bootloader) - RESERVED
   
-  for q=0 to (MAX_INPUT_MODULES-1)
-    w1=q*5  
-    if Mod_NE_I[q]="E" then
-      write w1,255        'Mode_ID in eeprom controller
-      write 1+w1,255
-      write 2+w1,255
-      write 3+w1,255
-      write 4+w1,255
-      Mod_NE_I[q]=255        'Mode_ID in eeprom controller
-      mod_ID0_I[q]=255
-      Mod_ID1_I[q]=255
-      Mod_ID2_I[q]=255
-      Mod_ID3_I[q]=255
-      clearwdt                    
-    endif    
-  next q
-  for q=30 to (MAX_OUTPUT_MODULES+29)
-    w1=q*5  
-    if Mod_NE_O[q-30]="E" then
-      write w1,255        'Mode_ID in eeprom controller
-      write 1+w1,255
-      write 2+w1,255
-      write 3+w1,255
-      write 4+w1,255
-      Mod_NE_O[q-30]=255        'Mode_ID in eeprom controller
-      mod_ID0_O[q-30]=255
-      Mod_ID1_O[q-30]=255
-      Mod_ID2_O[q-30]=255
-      Mod_ID3_O[q-30]=255
-      clearwdt                    
-    endif    
-  next q  
+  Gosub Erase_eeprom_input_modules
+  gosub Erase_eeprom_output_modules   
   for q=0 to 255
     for t=0 to 255
       clearwdt
