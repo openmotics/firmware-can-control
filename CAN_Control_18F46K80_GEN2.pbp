@@ -31,7 +31,7 @@ hardware                con     1
 
 VERSION                 con     4
 FIRMWARE                con     1
-BUILT                   con     39
+BUILT                   con     40
 
 MAX_NUMBER_CAN_MODULES  con     39
 MAX_NUMBER_CAN_INPUTS   CON     232
@@ -2803,39 +2803,13 @@ Check_erase_message:                                            'CLI instruction
     'hier debug can    
     if mode=="I" then
         if stackser1[5]=="I" and stackser1[6]==171 then         'Erase inputs
-            NrOfInputs=0
-            NrOfInputsNew=0 
-            write 304,NrOfInputs
-            QueueTxdByte0[QueueTxdPointer]=0
-            QueueTxdByte1[QueueTxdPointer]=190      'Erase all uCAN Inputs or Sensors
-            QueueTxdByte2[QueueTxdPointer]="I"      'Erase inputs
-            QueueTxdByte3[QueueTxdPointer]=69       'Erase code
-            QueueTxdByte4[QueueTxdPointer]=1        
-            QueueTxdByte5[QueueTxdPointer]=17
-            QueueTxdTime[QueueTxdPointer]=0         'sent message immeadiatly 
-            QueueTxdRetries[QueueTxdPointer]=0      'No retries so no response is expected 
-            QueueTxdNrBytes[QueueTxdPointer]=7 
-            gosub Add_Txd_queue           
-            gosub Sent_NrOfInputs
+            gosub send_ucan_erase_inputs
             s1="X"                                  'Erase done
             gosub send_F_response            
             'delete
             'hserout2 ["Erase CAN Control Inputs",13,10]
         elseif stackser1[5]=="S" and stackser1[6]==171 then     'Erase sensors
-            NrOfSensors=0
-            NrOfSensorsNew=0
-            write 305,NrOfSensors
-            QueueTxdByte0[QueueTxdPointer]=0
-            QueueTxdByte1[QueueTxdPointer]=190      'Erase all uCAN Inputs or Sensors
-            QueueTxdByte2[QueueTxdPointer]="S"      'Erase Sensors
-            QueueTxdByte3[QueueTxdPointer]=69       'Erase code
-            QueueTxdByte4[QueueTxdPointer]=1        
-            QueueTxdByte5[QueueTxdPointer]=17
-            QueueTxdTime[QueueTxdPointer]=0         'sent message immeadiatly 
-            QueueTxdRetries[QueueTxdPointer]=0      'No retries so no response is expected 
-            QueueTxdNrBytes[QueueTxdPointer]=7 
-            gosub Add_Txd_queue            
-            gosub Sent_NrOfSensors
+            gosub send_ucan_erase_sensors
             s1="X"                                  'Erase done
             gosub send_F_response            
             'delete
@@ -2851,6 +2825,55 @@ Check_erase_message:                                            'CLI instruction
                 Sensor_Error[q]=0
             next q
         endif
+    endif
+return
+
+send_ucan_erase_inputs:
+    NrOfInputs=0
+    NrOfInputsNew=0 
+    write 304,NrOfInputs
+    QueueTxdByte0[QueueTxdPointer]=0
+    QueueTxdByte1[QueueTxdPointer]=190      'Erase all uCAN Inputs or Sensors
+    QueueTxdByte2[QueueTxdPointer]="I"      'Erase inputs
+    QueueTxdByte3[QueueTxdPointer]=69       'Erase code
+    QueueTxdByte4[QueueTxdPointer]=1        
+    QueueTxdByte5[QueueTxdPointer]=17
+    QueueTxdTime[QueueTxdPointer]=0         'sent message immeadiatly 
+    QueueTxdRetries[QueueTxdPointer]=0      'No retries so no response is expected 
+    QueueTxdNrBytes[QueueTxdPointer]=7 
+    gosub Add_Txd_queue           
+    gosub Sent_NrOfInputs
+    gosub erase_module_eeprom
+return
+
+send_ucan_erase_sensors:
+    NrOfSensors=0
+    NrOfSensorsNew=0
+    write 305,NrOfSensors
+    QueueTxdByte0[QueueTxdPointer]=0
+    QueueTxdByte1[QueueTxdPointer]=190      'Erase all uCAN Inputs or Sensors
+    QueueTxdByte2[QueueTxdPointer]="S"      'Erase Sensors
+    QueueTxdByte3[QueueTxdPointer]=69       'Erase code
+    QueueTxdByte4[QueueTxdPointer]=1        
+    QueueTxdByte5[QueueTxdPointer]=17
+    QueueTxdTime[QueueTxdPointer]=0         'sent message immeadiatly 
+    QueueTxdRetries[QueueTxdPointer]=0      'No retries so no response is expected 
+    QueueTxdNrBytes[QueueTxdPointer]=7 
+    gosub Add_Txd_queue            
+    gosub Sent_NrOfSensors
+    gosub erase_module_eeprom
+return
+
+erase_module_eeprom:
+    if NrOfSensors==0 and NrOfInputs==0 then
+        gosub Erase_eeprom_input_modules
+        Gosub Erase_eeprom_output_modules
+        for q=0 to 31
+            Temperature[q]=255
+            Humidity[q]=255
+            ADCvalue[q]=255
+            Sensor_Error[q]=0
+        next q
     endif
 return
 
@@ -2881,29 +2904,25 @@ Check_firmware_message:
             gosub Add_Txd_queue
             StdSidUsed=1      
         endif
-    elseif stackser1[5]="X" then       'Request Eeprom Erase and factory reset
+    elseif stackser1[5]="X" and mode=="I" then       'Request Eeprom Erase and factory reset
         CRC2=stackser1[0]+stackser1[1]+stackser1[2]+stackser1[3]+stackser1[4]+stackser1[5]+stackser1[6]
         if CRC2=((256*stackser1[8])+stackser1[9]) and stackser1[7]="C" then
             if stackser1[6]=0 then
+                gosub send_ucan_erase_inputs
+                gosub send_ucan_erase_sensors
                 s1="X"                                'Full erase 
                 gosub send_F_response         
                 gosub erase_eeprom
             endif
             if stackser1[6]=1 then                                'Only erase of the NrOfInputs (and thus erase of inputs of the connected uCAN's
+                gosub send_ucan_erase_inputs
                 s1="X"
-                gosub send_F_response      
-                NrOfInputs=0
-                NrOfInputsNew=0   
-                write 304,NrOfInputs
-                gosub Sent_NrOfInputs        
+                gosub send_F_response             
             endif
             if stackser1[6]=2 then                                'Only erase of the NrOfSensors (and thus erase of sensors of the connected uCAN's
+                gosub send_ucan_erase_sensors
                 s1="X"
-                gosub send_F_response       
-                NrOfSensors=0
-                NrOfSensorsNew=0   
-                write 305,NrOfSensors
-                gosub Sent_NrOfSensors        
+                gosub send_F_response              
             endif
         else              'CRC error
             error_code=4
